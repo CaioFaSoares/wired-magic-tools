@@ -221,8 +221,8 @@ else
         if [ "$SKIP_WEB" -eq 0 ]; then
             command -v pnpm >/dev/null || die "pnpm não encontrado (instale pnpm ou use --binaries)"
             log "compilando web embutida"
-            pnpm --dir web install --frozen-lockfile
-            pnpm --dir web build
+            CI=true pnpm --dir web install --frozen-lockfile
+            CI=true pnpm --dir web build
         fi
         [ -f web/dist/index.html ] || die "web/dist/index.html ausente; rode sem --skip-web"
     fi
