@@ -135,7 +135,8 @@ O gerador `scripts/homebrew_formula.py` só aceita arquivos tar reais contendo a
 `wm` executável e confere `SHA256SUMS` antes de emitir a formula. Ele suporta as duas
 arquiteturas (default) ou uma só (`--archs arm64|x86_64`), gerando `depends_on arch:`
 para o caso single-arch. `--existing` compara versões estáveis numericamente e recusa
-downgrade.
+downgrade. A fórmula usa `depends_on macos: :sonoma` sozinho; o Homebrew 7 rejeita a
+combinação dessa versão com `depends_on :macos` no topo.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_homebrew_formula.py' -v
