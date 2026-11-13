@@ -74,6 +74,10 @@ A aba **Shares** lista todos os shares da malha. Nos shares do nó local:
 - `Enter` abre (web) ou copia/mostra o endereço (tcp/udp/game);
 - `c` copia o endereço selecionado.
 
+Com mouse: clique na linha para selecionar, use os botões **Novo/Abrir/Copiar/Renomear/On/Off/
+Remover** na linha de ações, ou duplo clique para abrir. O menu (**Menu**, `m` ou clique direito)
+repete todas as ações.
+
 Na aba **Peers**, `n` renomeia o nó local. A TUI mantém o agente rodando depois de `q` e mostra
 o último retrato de shares quando ele está parado; publicar, renomear ou remover exige o agente
 ativo. O comando `:share 3000 --name demo` também publica pelo console da TUI.

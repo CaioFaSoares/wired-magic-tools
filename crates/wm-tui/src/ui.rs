@@ -10,14 +10,15 @@ use wm_proto::{PathKind, ShareKind};
 
 use crate::actions;
 use crate::app::{
-    App, FieldKind, Form, Level, TABS, TAB_AGENT, TAB_CONSOLE, TAB_HELP, TAB_PEERS, TAB_SERVICES,
-    TAB_SHARES, TAB_STATUS, TAB_TOPOLOGY,
+    App, FieldKind, Level, MouseAction, TABS, TAB_AGENT, TAB_CONSOLE, TAB_HELP, TAB_PEERS,
+    TAB_SERVICES, TAB_SHARES, TAB_STATUS, TAB_TOPOLOGY,
 };
 
 const BORDER: Color = Color::DarkGray;
 const HIGHLIGHT: Color = Color::Rgb(22, 40, 52);
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    app.clear_hits();
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -25,9 +26,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Length(4),
             Constraint::Length(2),
             Constraint::Min(5),
+            Constraint::Length(1),
             Constraint::Length(2),
         ])
         .split(area);
+    app.tabs_rect = chunks[1];
+    app.body_rect = chunks[2];
+    app.actions_rect = chunks[3];
 
     draw_header(frame, chunks[0], app);
     draw_tabs(frame, chunks[1], app);
@@ -42,13 +47,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         TAB_HELP => draw_help(frame, chunks[2], app),
         _ => {}
     }
-    draw_footer(frame, chunks[3], app);
+    draw_action_bar(frame, chunks[3], app);
+    draw_footer(frame, chunks[4], app);
 
-    if let Some(form) = &app.form {
-        draw_form(frame, area, form);
-    }
-    if let Some(confirm) = &app.confirm {
-        draw_confirm(frame, area, confirm);
+    if app.menu.is_some() {
+        draw_menu(frame, area, app);
+    } else if app.form.is_some() {
+        draw_form(frame, area, app);
+    } else if app.confirm.is_some() {
+        draw_confirm(frame, area, app);
     }
 }
 
@@ -149,17 +156,276 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(vec![line, second]).block(block), area);
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, app: &App) {
-    let tabs = ratatui::widgets::Tabs::new(TABS.to_vec())
-        .select(app.tab)
-        .style(Style::default().fg(Color::Gray))
-        .highlight_style(
+fn draw_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut spans: Vec<Span> = Vec::new();
+    let mut x = area.x;
+    for (index, title) in TABS.iter().enumerate() {
+        let label = format!(" {title} ");
+        let width = label.chars().count() as u16;
+        if x.saturating_add(width) > area.right() {
+            break;
+        }
+        let rect = Rect {
+            x,
+            y: area.y,
+            width,
+            height: area.height,
+        };
+        let selected = app.tab == index;
+        let hovered = !app.modal_open() && app.mouse_inside(rect);
+        let style = if selected {
             Style::default()
                 .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .divider("·");
-    frame.render_widget(tabs, area);
+                .bg(Color::Rgb(18, 32, 40))
+                .add_modifier(Modifier::BOLD)
+        } else if hovered {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        spans.push(Span::styled(label, style));
+        app.register_hit(rect, MouseAction::Tab(index));
+        x = x.saturating_add(width);
+        if index + 1 < TABS.len() && x < area.right() {
+            spans.push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+            app.register_hit(
+                Rect {
+                    x,
+                    y: area.y,
+                    width: 1,
+                    height: area.height,
+                },
+                MouseAction::Tab(index),
+            );
+            x = x.saturating_add(1);
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)),
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        },
+    );
+}
+
+#[derive(Clone)]
+struct ButtonSpec {
+    label: &'static str,
+    action: MouseAction,
+}
+
+fn button(label: &'static str, action: MouseAction) -> ButtonSpec {
+    ButtonSpec { label, action }
+}
+
+fn action_bar_specs(app: &App) -> Vec<ButtonSpec> {
+    let mut specs = Vec::new();
+    match app.tab {
+        TAB_STATUS => {
+            if !app.is_enrolled() {
+                specs.push(button("Entrar", MouseAction::Join));
+                specs.push(button("Comando", MouseAction::OpenConsole));
+            } else {
+                if app.live {
+                    specs.push(button("Parar", MouseAction::StopAgent));
+                    specs.push(button("Reiniciar", MouseAction::RestartAgent));
+                } else {
+                    specs.push(button("Iniciar", MouseAction::StartAgent));
+                }
+                specs.push(button("Auto", MouseAction::ToggleAutoStart));
+                specs.push(button("Ajustes", MouseAction::AgentSettings));
+                specs.push(button("Log", MouseAction::AgentLog));
+                specs.push(button("GUI", MouseAction::OpenGui));
+                specs.push(button("Painel", MouseAction::AdminPanel));
+            }
+        }
+        TAB_PEERS => {
+            specs.push(button("Ping", MouseAction::Ping));
+            specs.push(button("Probe", MouseAction::Probe));
+            specs.push(button("Reconectar", MouseAction::Reconnect));
+            specs.push(button("Copiar", MouseAction::CopyPeer));
+            specs.push(button("Renomear", MouseAction::RenameNode));
+        }
+        TAB_SHARES => {
+            specs.push(button("Novo", MouseAction::NewShare));
+            specs.push(button("Abrir", MouseAction::OpenShare));
+            specs.push(button("Copiar", MouseAction::CopyShare));
+            specs.push(button("Renomear", MouseAction::RenameShare));
+            specs.push(button("On/Off", MouseAction::ToggleShare));
+            specs.push(button("Remover", MouseAction::DeleteShare));
+        }
+        TAB_TOPOLOGY => {
+            specs.push(button("Peers", MouseAction::Tab(TAB_PEERS)));
+            specs.push(button("Shares", MouseAction::Tab(TAB_SHARES)));
+            specs.push(button("Agente", MouseAction::Tab(TAB_AGENT)));
+            specs.push(button("Console", MouseAction::Tab(TAB_CONSOLE)));
+        }
+        TAB_AGENT => {
+            if app.live {
+                specs.push(button("Parar", MouseAction::StopAgent));
+                specs.push(button("Reiniciar", MouseAction::RestartAgent));
+            } else {
+                specs.push(button("Iniciar", MouseAction::StartAgent));
+            }
+            specs.push(button("Auto", MouseAction::ToggleAutoStart));
+            specs.push(button("Ajustes", MouseAction::AgentSettings));
+            specs.push(button("Log", MouseAction::AgentLog));
+            specs.push(button("Serviço", MouseAction::InstallService));
+        }
+        TAB_SERVICES => {
+            let gui_active = app
+                .jobs
+                .iter()
+                .any(|job| job.label == "gui" && crate::agent::pid_alive(job.pid));
+            if gui_active {
+                specs.push(button("Fechar GUI", MouseAction::CloseGui));
+            } else {
+                specs.push(button("Abrir GUI", MouseAction::OpenGui));
+            }
+            specs.push(button("Painel", MouseAction::AdminPanel));
+            specs.push(button("Log", MouseAction::JobLog));
+            specs.push(button("Parar job", MouseAction::StopSelectedJob));
+            specs.push(button("Instalar", MouseAction::InstallService));
+            specs.push(button("Status", MouseAction::ServiceStatus));
+            specs.push(button("Doctor", MouseAction::Doctor));
+        }
+        TAB_CONSOLE => {
+            specs.push(button("Comando", MouseAction::OpenConsole));
+            specs.push(button("Limpar", MouseAction::ClearConsole));
+        }
+        TAB_HELP => {
+            specs.push(button("Início", MouseAction::Tab(TAB_STATUS)));
+            specs.push(button("Peers", MouseAction::Tab(TAB_PEERS)));
+            specs.push(button("Shares", MouseAction::Tab(TAB_SHARES)));
+            specs.push(button("Agente", MouseAction::Tab(TAB_AGENT)));
+            specs.push(button("Console", MouseAction::Tab(TAB_CONSOLE)));
+        }
+        _ => {}
+    }
+    specs
+}
+
+fn draw_action_bar(frame: &mut Frame, area: Rect, app: &mut App) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let menu_width = 7.min(area.width);
+    let menu_rect = Rect {
+        x: area.right().saturating_sub(menu_width),
+        y: area.y,
+        width: menu_width,
+        height: 1,
+    };
+    let limit = menu_rect.x;
+    let mut x = area.x;
+    for spec in action_bar_specs(app) {
+        let label = format!(" {} ", spec.label);
+        let width = label.chars().count() as u16;
+        if x.saturating_add(width) > limit {
+            break;
+        }
+        let rect = Rect {
+            x,
+            y: area.y,
+            width,
+            height: 1,
+        };
+        draw_button(frame, app, rect, &label, spec.action, false);
+        x = x.saturating_add(width + 1);
+    }
+    draw_button(frame, app, menu_rect, " Menu ", MouseAction::OpenMenu, false);
+}
+
+fn draw_button(
+    frame: &mut Frame,
+    app: &mut App,
+    rect: Rect,
+    label: &str,
+    action: MouseAction,
+    overlay: bool,
+) {
+    let hovered = app.mouse_inside(rect) && (overlay || !app.modal_open());
+    let style = if hovered {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(30, 45, 55))
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(label.to_string(), style)))
+            .alignment(Alignment::Center),
+        rect,
+    );
+    if overlay {
+        app.register_overlay_hit(rect, action);
+    } else {
+        app.register_hit(rect, action);
+    }
+}
+
+fn draw_button_row(frame: &mut Frame, area: Rect, app: &mut App, specs: &[ButtonSpec]) {
+    let mut x = area.x;
+    for spec in specs {
+        let label = format!(" {} ", spec.label);
+        let width = label.chars().count() as u16;
+        if x.saturating_add(width) > area.right() {
+            break;
+        }
+        let rect = Rect {
+            x,
+            y: area.y,
+            width,
+            height: 1,
+        };
+        draw_button(frame, app, rect, &label, spec.action.clone(), true);
+        x = x.saturating_add(width + 1);
+    }
+}
+
+fn register_table_rows(
+    app: &mut App,
+    area: Rect,
+    offset: usize,
+    len: usize,
+    action: impl Fn(usize) -> MouseAction,
+) {
+    let visible = area.height.saturating_sub(3) as usize;
+    if visible == 0 || area.width < 3 {
+        return;
+    }
+    let bottom = area
+        .y
+        .saturating_add(area.height)
+        .saturating_sub(1);
+    for row in 0..visible {
+        let index = offset + row;
+        if index >= len {
+            break;
+        }
+        let y = area.y.saturating_add(2 + row as u16);
+        if y >= bottom {
+            break;
+        }
+        app.register_hit(
+            Rect {
+                x: area.x + 1,
+                y,
+                width: area.width.saturating_sub(2),
+                height: 1,
+            },
+            action(index),
+        );
+    }
 }
 
 fn block(title: impl Into<String>) -> Block<'static> {
@@ -462,6 +728,9 @@ fn draw_peers(frame: &mut Frame, area: Rect, app: &mut App) {
     .highlight_symbol("▸ ")
     .block(block(stale(app, &format!("Peers ({})", app.peers.len()))));
     frame.render_stateful_widget(table, area, &mut app.table);
+    let offset = app.table.offset();
+    let peers = app.peers.len();
+    register_table_rows(app, area, offset, peers, MouseAction::SelectPeer);
 
     if app.peers.is_empty() {
         let msg = if app.is_enrolled() {
@@ -538,6 +807,9 @@ fn draw_shares(frame: &mut Frame, area: Rect, app: &mut App) {
     .highlight_symbol("▸ ")
     .block(block(stale(app, &format!("Shares ({})", app.shares.len()))));
     frame.render_stateful_widget(table, chunks[0], &mut app.shares_table);
+    let offset = app.shares_table.offset();
+    let shares = app.shares.len();
+    register_table_rows(app, chunks[0], offset, shares, MouseAction::SelectShare);
 
     if app.shares.is_empty() {
         let msg = if app.is_enrolled() && app.live {
@@ -805,12 +1077,13 @@ fn draw_agent(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_services(frame: &mut Frame, area: Rect, app: &mut App) {
+    let extensions_height = if area.height >= 22 { 5 } else { 3 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),
+            Constraint::Length(7),
             Constraint::Min(4),
-            Constraint::Min(4),
+            Constraint::Length(extensions_height),
         ])
         .split(area);
 
@@ -843,10 +1116,6 @@ fn draw_services(frame: &mut Frame, area: Rect, app: &mut App) {
         kv(
             "painel admin",
             "p abre a URL do control no navegador (login de admin)",
-        ),
-        kv(
-            "host/serve",
-            "use :host ou :serve na aba Console (inicia em segundo plano)",
         ),
     ];
     frame.render_widget(
@@ -897,12 +1166,15 @@ fn draw_services(frame: &mut Frame, area: Rect, app: &mut App) {
         format!(" Jobs em segundo plano ({}) ", app.jobs.len())
     }));
     frame.render_stateful_widget(table, chunks[1], &mut app.jobs_table);
+    let offset = app.jobs_table.offset();
+    let jobs = app.jobs.len();
+    register_table_rows(app, chunks[1], offset, jobs, MouseAction::SelectJob);
 
     if app.jobs.is_empty() {
         empty_message(
             frame,
             chunks[1],
-            "nenhum host/serve/gui em segundo plano; use :host ou :serve no Console",
+            "nenhum host/serve/gui em segundo plano; use :host/:serve ou o menu de ações",
         );
     }
 
@@ -1030,6 +1302,18 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::from("  q / Ctrl+C         sai — o agente continua rodando e reconecta"),
         Line::from(""),
         Line::from(Span::styled(
+            "mouse",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("  clique             abas, botões de ação, linhas de tabela e modais"),
+        Line::from("  duplo clique       abre share, probe do peer ou log do job"),
+        Line::from("  roda do mouse      rola listas, console, ajuda e troca de aba"),
+        Line::from("  clique direito     abre o menu com todas as ações (ou tecla m)"),
+        Line::from("  formulários        clique no campo alterna opção; botões Confirmar/Cancelar"),
+        Line::from("  Shift+arrastar     seleciona texto; --no-mouse desliga a captura"),
+        Line::from(""),
+        Line::from(Span::styled(
             "primeiros passos",
             Style::default().add_modifier(Modifier::BOLD),
         )),
@@ -1108,13 +1392,14 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Length(1)])
         .split(area);
 
     if let Some(input) = &app.input {
+        app.input_rect = chunks[0];
         let mut prompt = vec![
             Span::styled(": ", Style::default().fg(Color::Cyan)),
             Span::raw(input.value.clone()),
@@ -1218,111 +1503,307 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn draw_form(frame: &mut Frame, area: Rect, form: &Form) {
-    let height = (form.fields.len() as u16 + 7).min(area.height.saturating_sub(2));
+fn draw_form(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(form) = app.form.as_ref() else {
+        return;
+    };
+    let height = (form.fields.len() as u16 + 8).min(area.height.saturating_sub(2));
     let width = area.width.saturating_sub(8).clamp(44, 86).min(area.width);
     let rect = centered(area, width, height);
-    frame.render_widget(Clear, rect);
+    let inner = rect.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let content = sections[0];
+    let buttons = sections[1];
+    let mouse = app.mouse;
 
-    let mut lines: Vec<Line> = Vec::new();
-    for (index, field) in form.fields.iter().enumerate() {
-        let focused = index == form.focus;
-        let label_style = if focused {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        let value = match field.kind {
-            FieldKind::Choice => format!("‹ {} ›", field.value),
-            FieldKind::Bool => format!("[{}]", field.value),
-            _ => {
-                if field.kind == FieldKind::Text && field.max > 0 {
-                    fit_tail(&field.value, 60)
-                } else {
-                    field.value.clone()
-                }
+    let (lines, hits, title) = {
+        let form = app.form.as_ref().expect("form is open");
+        let mut lines: Vec<Line> = Vec::new();
+        let mut hits: Vec<(Rect, MouseAction)> = Vec::new();
+        for (index, field) in form.fields.iter().enumerate() {
+            let focused = index == form.focus;
+            let row_y = content.y.saturating_add(index as u16);
+            let row_rect = Rect {
+                x: content.x,
+                y: row_y,
+                width: content.width,
+                height: 1,
+            };
+            if row_y < content.y.saturating_add(content.height) {
+                let action = match field.kind {
+                    FieldKind::Bool => MouseAction::FormToggle(index),
+                    FieldKind::Choice => MouseAction::FormCycle(index, true),
+                    _ => MouseAction::FormFocus(index),
+                };
+                hits.push((row_rect, action));
             }
-        };
-        let value_style = if focused {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        lines.push(Line::from(vec![
-            Span::styled(if focused { "▸ " } else { "  " }, label_style),
-            Span::styled(format!("{:<18}", field.label), label_style),
-            Span::styled(value, value_style),
-            Span::styled(
-                if focused {
-                    format!("  {}█", if field.kind == FieldKind::Text { " " } else { "" })
-                } else {
-                    String::new()
-                },
-                Style::default().fg(Color::Cyan),
-            ),
-        ]));
-    }
-    lines.push(Line::from(""));
-    if let Some(field) = form.focused() {
+            let hovered = mouse.is_some_and(|(column, row)| {
+                crate::app::rect_contains(row_rect, column, row)
+            });
+            let label_style = if focused {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if hovered {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let value = match field.kind {
+                FieldKind::Choice => format!("‹ {} ›", field.value),
+                FieldKind::Bool => format!("[{}]", field.value),
+                _ => {
+                    if field.kind == FieldKind::Text && field.max > 0 {
+                        fit_tail(&field.value, 60)
+                    } else {
+                        field.value.clone()
+                    }
+                }
+            };
+            let value_style = if focused {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else if hovered {
+                Style::default().fg(Color::White)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            let mut spans = vec![
+                Span::styled(if focused { "▸ " } else { "  " }, label_style),
+                Span::styled(format!("{:<18}", field.label), label_style),
+                Span::styled(value, value_style),
+            ];
+            if focused && !matches!(field.kind, FieldKind::Choice | FieldKind::Bool) {
+                spans.push(Span::styled(
+                    "  █",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+        lines.push(Line::from(""));
+        if let Some(field) = form.focused() {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", field.hint),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        if let Some(note) = form.note {
+            lines.push(Line::from(Span::styled(
+                format!("  {note}"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        if let Some(error) = &form.error {
+            lines.push(Line::from(Span::styled(
+                format!("  ✗ {error}"),
+                Style::default().fg(Color::Red),
+            )));
+        }
         lines.push(Line::from(Span::styled(
-            format!("  {}", field.hint),
+            "  clique: foca/alterna · Tab/↑↓ campo · Enter envia · Esc cancela",
             Style::default().fg(Color::DarkGray),
         )));
-    }
-    if let Some(note) = form.note {
-        lines.push(Line::from(Span::styled(
-            format!("  {note}"),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    if let Some(error) = &form.error {
-        lines.push(Line::from(Span::styled(
-            format!("  ✗ {error}"),
-            Style::default().fg(Color::Red),
-        )));
-    }
-    lines.push(Line::from(Span::styled(
-        "  Tab/↑↓ campo · ←→ alterna · Enter confirma · Esc cancela",
-        Style::default().fg(Color::DarkGray),
-    )));
+        (lines, hits, form.title)
+    };
 
+    frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(format!(" {} ", form.title))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        Block::default()
+            .title(format!(" {title} "))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
         rect,
+    );
+    // Fields must stay one line per row: hit regions are computed from the
+    // field index, so wrapping would shift clicks onto the wrong field.
+    frame.render_widget(Paragraph::new(lines), content);
+    draw_button_row(
+        frame,
+        buttons,
+        app,
+        &[
+            button("Confirmar", MouseAction::FormSubmit),
+            button("Cancelar", MouseAction::FormCancel),
+        ],
+    );
+    for (rect, action) in hits {
+        app.register_overlay_hit(rect, action);
+    }
+}
+
+fn draw_confirm(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(confirm) = app.confirm.as_ref() else {
+        return;
+    };
+    let height = (confirm.lines.len() as u16 + 6).min(area.height.saturating_sub(2));
+    let rect = centered(area, 72.min(area.width), height);
+    let inner = rect.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let (lines, title) = {
+        let confirm = app.confirm.as_ref().expect("confirm is open");
+        let mut lines: Vec<Line> = confirm
+            .lines
+            .iter()
+            .map(|line| Line::from(Span::raw(line.clone())))
+            .collect();
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "s",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" confirmar   "),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ou Esc cancela"),
+        ]));
+        (lines, confirm.title.clone())
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Block::default()
+            .title(format!(" {title} "))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+        rect,
+    );
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        sections[0],
+    );
+    draw_button_row(
+        frame,
+        sections[1],
+        app,
+        &[
+            button("Confirmar", MouseAction::ConfirmYes),
+            button("Cancelar", MouseAction::ConfirmNo),
+        ],
     );
 }
 
-fn draw_confirm(frame: &mut Frame, area: Rect, confirm: &crate::app::Confirm) {
-    let height = (confirm.lines.len() as u16 + 6).min(area.height.saturating_sub(2));
-    let rect = centered(area, 72.min(area.width), height);
+fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(menu) = app.menu.as_ref() else {
+        return;
+    };
+    let total = menu.items.len();
+    let height = (total as u16 + 4).min(area.height.saturating_sub(2));
+    let width = area.width.saturating_sub(8).clamp(44, 78).min(area.width);
+    let rect = centered(area, width, height);
+    let inner = rect.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let list = sections[0];
+    let buttons = sections[1];
+    let visible = list.height as usize;
+    let (lines, hits, title, offset) = {
+        let menu = app.menu.as_ref().expect("menu is open");
+        let mut offset = menu.offset;
+        if menu.selected < offset {
+            offset = menu.selected;
+        }
+        if visible > 0 && menu.selected >= offset + visible {
+            offset = menu.selected + 1 - visible;
+        }
+        let max_offset = total.saturating_sub(visible);
+        offset = offset.min(max_offset);
+        let mut lines = Vec::new();
+        let mut hits = Vec::new();
+        for row in 0..visible {
+            let index = offset + row;
+            if index >= total {
+                break;
+            }
+            let item = &menu.items[index];
+            let selected = index == menu.selected;
+            let row_rect = Rect {
+                x: list.x,
+                y: list.y.saturating_add(row as u16),
+                width: list.width,
+                height: 1,
+            };
+            let hovered = app
+                .mouse
+                .is_some_and(|(column, row)| crate::app::rect_contains(row_rect, column, row));
+            let style = if selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Rgb(18, 32, 40))
+                    .add_modifier(Modifier::BOLD)
+            } else if hovered {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(if selected { "▸ " } else { "  " }, style),
+                Span::styled(
+                    truncate(&item.label, list.width.saturating_sub(2) as usize),
+                    style,
+                ),
+            ]));
+            hits.push((row_rect, MouseAction::MenuSelect(index)));
+        }
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "sem ações disponíveis",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        let title = format!(
+            " Ações · {}/{} · ↑↓ Enter · Esc ",
+            menu.selected.saturating_add(1).min(total.max(1)),
+            total
+        );
+        (lines, hits, title, offset)
+    };
     frame.render_widget(Clear, rect);
-    let mut lines: Vec<Line> = confirm
-        .lines
-        .iter()
-        .map(|line| Line::from(Span::raw(line.clone())))
-        .collect();
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("s", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Span::raw(" confirmar   "),
-        Span::styled("n", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Span::raw(" ou Esc cancela"),
-    ]));
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(format!(" {} ", confirm.title))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
-        ),
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
         rect,
+    );
+    frame.render_widget(Paragraph::new(lines), list);
+    if let Some(menu) = app.menu.as_mut() {
+        menu.offset = offset;
+    }
+    for (rect, action) in hits {
+        app.register_overlay_hit(rect, action);
+    }
+    draw_button_row(
+        frame,
+        buttons,
+        app,
+        &[button("Fechar", MouseAction::MenuClose)],
     );
 }
 
@@ -1551,6 +2032,83 @@ mod tests {
         println!("===== 80x24: Serviços =====");
         app.tab = TAB_SERVICES;
         println!("{}", render(&mut app, 80, 24));
+        println!("===== menu =====");
+        crate::open_menu(&mut app);
+        println!("{}", render(&mut app, 110, 32));
+        app.menu = None;
+        println!("===== confirmação =====");
+        app.confirm = Some(crate::app::Confirm {
+            title: "Parar o agente".into(),
+            lines: vec![
+                "Isto encerra a conexão da malha neste nó.".into(),
+                "Os shares e a inscrição continuam gravados.".into(),
+            ],
+            action: crate::app::ConfirmAction::StopAgent,
+        });
+        println!("{}", render(&mut app, 110, 32));
+        std::fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn mouse_hit_regions_are_inside_the_frame_and_do_not_overlap() {
+        let mut app = demo_app("mouse-hits");
+        for tab in 0..TABS.len() {
+            app.tab = tab;
+            let _ = render(&mut app, 80, 24);
+            assert!(
+                app.hits
+                    .iter()
+                    .any(|hit| hit.action == MouseAction::OpenMenu),
+                "aba {tab} sem botão de menu"
+            );
+            for hit in &app.hits {
+                assert!(hit.rect.width > 0 && hit.rect.height > 0);
+                assert!(
+                    hit.rect.x + hit.rect.width <= 80 && hit.rect.y + hit.rect.height <= 24,
+                    "hit fora da tela: {:?} {:?}",
+                    hit.action,
+                    hit.rect
+                );
+            }
+            for (index, left) in app.hits.iter().enumerate() {
+                for right in app.hits.iter().skip(index + 1) {
+                    let overlap = left.rect.x < right.rect.x + right.rect.width
+                        && right.rect.x < left.rect.x + left.rect.width
+                        && left.rect.y < right.rect.y + right.rect.height
+                        && right.rect.y < left.rect.y + left.rect.height;
+                    assert!(
+                        !overlap,
+                        "hits sobrepostos: {:?} {:?} x {:?} {:?}",
+                        left.action, left.rect, right.action, right.rect
+                    );
+                }
+            }
+        }
+        std::fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn tiny_terminal_renders_all_tabs_and_overlays() {
+        let mut app = demo_app("tiny");
+        for size in [(1, 1), (20, 8), (40, 12), (60, 18)] {
+            for tab in 0..TABS.len() {
+                app.tab = tab;
+                let _ = render(&mut app, size.0, size.1);
+            }
+            app.form = Some(crate::app::new_share_form());
+            let _ = render(&mut app, size.0, size.1);
+            app.form = None;
+            app.confirm = Some(crate::app::Confirm {
+                title: "Teste".into(),
+                lines: vec!["linha".into()],
+                action: crate::app::ConfirmAction::StopAgent,
+            });
+            let _ = render(&mut app, size.0, size.1);
+            app.confirm = None;
+            crate::open_menu(&mut app);
+            let _ = render(&mut app, size.0, size.1);
+            app.menu = None;
+        }
         std::fs::remove_dir_all(&app.root).unwrap();
     }
 

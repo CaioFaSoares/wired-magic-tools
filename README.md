@@ -789,6 +789,12 @@ inscrever o nó, subir/parar o agente, publicar shares ou rodar qualquer subcoma
   extensões e jobs em segundo plano (`host`, `serve`, `gui`). O **Console** (`:` em qualquer
   aba) executa qualquer subcomando `wm` sem shell, com a saída transcrita. Comandos longos
   (`up`, `join`, `host`, `serve`, `gui`) rodam em segundo plano.
+- **Mouse:** abas, botões de ação, linhas de tabela e modais são clicáveis; duplo clique abre
+  share, probe do peer ou log do job; a roda rola listas/console/ajuda; clique direito (ou `m`,
+  ou o botão **Menu**) abre o menu com todas as ações, inclusive iniciar host/serve locais;
+  formulários e confirmações têm botões.
+  `--no-mouse` desliga a captura (útil para seleção de texto; `Shift+arrastar` também costuma
+  funcionar).
 - **Sessão persistente:** aba, histórico, configurações, jobs e o último retrato de peers/shares
   ficam em `<data-dir>/tui-state.json` (0600); os eventos vão para `tui-events.jsonl`. Tokens e
   convites são redigidos antes de gravar. Ao reabrir, a TUI retoma a aba e mostra os dados da
@@ -804,7 +810,8 @@ Abas: **Início**, **Peers**, **Shares**, **Mapa**, **Agente**, **Serviços**, *
   `Enter` abre, `c` copia;
 - **Serviços**: `Enter` abre o log do job, `g`/`G` abre/fecha a GUI local, `p` abre o painel
   admin, `x` para o job selecionado, `i`/`u` instala/remove o serviço, `t` status, `d` doctor;
-- `:` console de comandos; `?` ajuda; `q` sai mantendo o agente.
+- `m` ou clique direito abre o menu completo; `:` console de comandos; `?` ajuda; `q` sai
+  mantendo o agente.
 
 Se o nó já está inscrito, `sudo wm tui` é suficiente: a TUI se conecta ao agente existente (de
 serviço ou de um `wm up` em outro terminal) e não o reinicia.
@@ -896,7 +903,7 @@ No Linux, logs do serviço: `journalctl -u wired-magic-agent -n 200 --no-pager`.
 | `wm unshare <nome>` | remove um share seu |
 | `wm rename <nome>` | renomeia este nó |
 | `wm gui` | GUI local de membro (`--no-open`, `--listen`) |
-| `wm tui [--no-auto-start]` | console completo: inscrição, agente, shares, jobs e comandos |
+| `wm tui [--no-auto-start] [--no-mouse]` | console completo: inscrição, agente, shares, jobs, comandos e mouse |
 | `wm doctor` | diagnóstico (root, control, rota, socket) |
 | `wm version` | versão e protocolo |
 | `wm service install` (e `status`/`uninstall`) | systemd/launchd (`--mode agent` ou `host`) |

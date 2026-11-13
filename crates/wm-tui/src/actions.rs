@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Instant;
 
 use serde_json::{Value, json};
+use uuid::Uuid;
 use wm_proto::{ShareKind, ShareProtocol, validate_share_description, validate_share_name};
 
 use crate::agent;
@@ -591,6 +592,17 @@ pub fn perform_confirm(app: &mut App, action: ConfirmAction, tx: &Sender<Msg>) {
                 app.notify(Level::Info, format!("parando {label} (pid {pid})…"));
             }
         }
+        ConfirmAction::StartHost => start_host(app, tx),
+        ConfirmAction::StartServe => start_serve(app, tx),
+        ConfirmAction::DeleteShare(id) => {
+            let name = app
+                .shares
+                .iter()
+                .find(|share| share.id == id)
+                .map(|share| share.name.clone())
+                .unwrap_or_else(|| id.to_string());
+            delete_share(app, id, name, tx);
+        }
         ConfirmAction::InstallService => {
             if !is_root() {
                 app.notify(Level::Error, "instalar o serviço exige root");
@@ -949,6 +961,46 @@ pub fn service_status(app: &mut App, tx: &Sender<Msg>) {
     );
 }
 
+/// Starts the default control plane + relay + local node as a background job.
+pub fn confirm_start_host(app: &mut App) {
+    app.confirm = Some(Confirm {
+        title: "Iniciar host local".into(),
+        lines: vec![
+            "Sobe control plane, relay/STUN e o nó local como job em segundo plano.".into(),
+            "Usa os padrões (127.0.0.1:8080) e grava em host.log.".into(),
+            "Exige root e pode conflitar com um agente/host já ativo.".into(),
+            "Para URL pública, TLS ou senha, use o console: host --help.".into(),
+        ],
+        action: ConfirmAction::StartHost,
+    });
+}
+
+/// Starts a control-plane-only server as a background job.
+pub fn confirm_start_serve(app: &mut App) {
+    app.confirm = Some(Confirm {
+        title: "Iniciar serve local".into(),
+        lines: vec![
+            "Sobe somente o control plane como job em segundo plano.".into(),
+            "Usa os padrões (127.0.0.1:8080) e grava em serve.log.".into(),
+            "Não inicia agente/TUN; pode conflitar com um host já ativo.".into(),
+            "Para config/TLS, use o console: serve --help.".into(),
+        ],
+        action: ConfirmAction::StartServe,
+    });
+}
+
+fn start_host(app: &mut App, tx: &Sender<Msg>) {
+    if !is_root() {
+        app.notify(Level::Error, "iniciar o host exige root");
+        return;
+    }
+    launch_job(app, "host", vec!["host".into()], tx);
+}
+
+fn start_serve(app: &mut App, tx: &Sender<Msg>) {
+    launch_job(app, "serve", vec!["serve".into()], tx);
+}
+
 pub fn confirm_install_service(app: &mut App) {
     app.confirm = Some(Confirm {
         title: "Instalar serviço do agente".into(),
@@ -1155,9 +1207,33 @@ pub fn request_delete_share(app: &mut App, tx: &Sender<Msg>) {
         return;
     }
     app.delete_armed = None;
-    let socket = app.socket.clone();
     let id = share.id;
     let name = share.name.clone();
+    delete_share(app, id, name, tx);
+}
+
+/// Opens the confirmation used by the mouse "Remover" action.
+pub fn confirm_delete_share(app: &mut App) {
+    let Some(share) = app.selected_share().cloned() else {
+        app.notify(Level::Warn, "nenhum share selecionado");
+        return;
+    };
+    if !app.is_own_share(&share) {
+        app.notify(Level::Warn, "só o dono pode remover este share");
+        return;
+    }
+    app.confirm = Some(Confirm {
+        title: "Remover share".into(),
+        lines: vec![
+            format!("Remove '{}' do inventário da malha.", share.name),
+            "O endereço deixa de aparecer para os outros nós.".into(),
+        ],
+        action: ConfirmAction::DeleteShare(share.id),
+    });
+}
+
+fn delete_share(app: &mut App, id: Uuid, name: String, tx: &Sender<Msg>) {
+    let socket = app.socket.clone();
     app.notify(Level::Info, format!("removendo share {name}…"));
     let tx = tx.clone();
     thread::spawn(move || {

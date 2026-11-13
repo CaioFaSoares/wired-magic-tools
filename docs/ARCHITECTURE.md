@@ -32,7 +32,7 @@ userspace no espaço do usuário, com um TUN/utun por nó.
 | API/control | `wm-control` | axum, SQLite (sqlx), presença, mapa long-poll, admin, SSE, integração |
 | Relay/STUN | `wm-control` | `/relay` WebSocket + STUN Binding UDP 3478 |
 | Agente | `wm-core` | boringtun, TUN, rotas, STUN client, candidatos, relay client, API local |
-| TUI | `wm-tui` | console do membro; onboarding, agente destacado, shares, console de comandos e sessão persistente |
+| TUI | `wm-tui` | console do membro; onboarding, agente destacado, shares, console, mouse/atalhos e sessão persistente |
 | CLI | `wm` | host/join/up/down/serve/tui/doctor/service |
 | Front | `web/` | painel React embutido no binário via `rust-embed` |
 

@@ -79,6 +79,31 @@ Objetivo ativo: implementar o plano de prontidão até uma versão testável. N�
   real com TUN/root, jobs `host`/`serve` reais, instalação systemd/launchd e navegador da GUI.
   Permanecem dependentes dos testes de campo já listados abaixo.
 
+## Rodada 5 — controle por mouse
+
+- `wm tui` ativa `EnableMouseCapture` (e desativa na saída) com mapa de hit regions gerado a cada
+  frame: abas clicáveis, botões de ação contextuais por aba, linhas de tabela com clique/duplo
+  clique, roda para listas/console/ajuda e clique direito para o menu completo de ações.
+- Menu de ações (botão **Menu**, tecla `m` ou clique direito) cobre o caminho por mouse para
+  todas as operações: agente, shares, peers, jobs, serviço, host/serve locais, GUI, painel admin,
+  abas, console e saída. Formulários e confirmações têm campos clicáveis e botões
+  Confirmar/Cancelar.
+- Duplo clique ativa a linha apenas quando ação e coordenada coincidem, evitando abrir o item
+  errado quando a tabela rola para mostrar a seleção. Tabelas usam o offset real do Ratatui para
+  mapear linhas visíveis; overlays são hit-testados antes da UI de trás.
+- `--no-mouse` desliga a captura para seleção nativa de texto; `Shift+arrastar` também é o
+  escape usual em terminais que suportam. Hover usa eventos de movimento quando o terminal os
+  envia, com fallback visual nos botões.
+- Testes novos cobrem troca de aba, menu/console via clique, clique em linha e duplo clique,
+  mapeamento de linhas com offset/rolagem, ciclo/foco/cancelamento de formulário (inclusive em
+  80 colunas), confirmação de remoção, confirmação de host, roda, clique direito, menu até “Sair”,
+  integridade e não sobreposição das hit regions, além de renderização em 1×1/20×8/40×12/60×18. Suíte integrada:
+  `CARGO_HOME="$PWD/.cargo-home" cargo test --workspace --offline` — **137 aprovados, 1 preview
+  manual ignorado**, exit 0.
+- Não executado nesta rodada: TUI num TTY real com mouse (o ambiente não abre pty), terminal
+  físico/multiplexador e seleção de texto no terminal. O comportamento é coberto por
+  `TestBackend` e eventos de mouse sintéticos; confirme com o terminal real.
+
 ## Marco e próximos passos externos
 
 **Implementado para testes locais, não aprovado para produção.** Reproduzir com [teste local](TESTE-LOCAL.md). Serviços: [roteiro](SERVICOS-TESTE.md). Rede: [E2E assertivo](E2E-ASSERTIVO.md).

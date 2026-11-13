@@ -230,6 +230,9 @@ struct TuiArgs {
     /// Não inicia o agente automaticamente ao abrir a TUI.
     #[arg(long)]
     no_auto_start: bool,
+    /// Não captura o mouse (mantém a seleção de texto nativa do terminal).
+    #[arg(long)]
+    no_mouse: bool,
 }
 
 #[derive(clap::Args)]
@@ -852,6 +855,7 @@ async fn run_tui(root: &Path, args: TuiArgs) -> anyhow::Result<()> {
         root.to_path_buf(),
         wm_tui::RunOptions {
             no_auto_start: args.no_auto_start,
+            no_mouse: args.no_mouse,
         },
     )
 }

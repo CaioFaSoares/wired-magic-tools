@@ -120,3 +120,20 @@ No painel, revogue o nó antes de descartar a máquina, para remover a chave do 
 - **Jobs em segundo plano:** `:host`, `:serve` e `:gui` escrevem em `<dir>/host.log`,
   `serve.log` e `gui.log`. A aba **Serviços** lista os pids; `x` para o selecionado. Fechar a
   TUI não encerra esses jobs — pare-os pela TUI ou com `kill`.
+
+## 12. Mouse na TUI
+
+- **Cliques não respondem em tmux/screen/SSH:** o terminal ou multiplexador precisa repassar
+  eventos de mouse. Habilite o mouse no terminal/tmux; o teclado continua funcionando em paralelo.
+- **Selecionar texto ficou difícil:** rode `wm tui --no-mouse` (desliga a captura) ou use
+  `Shift+arrastar`, que normalmente ignora a captura do aplicativo.
+- **Onde clicar:** abas no topo, botões da linha de ações, linhas das tabelas e botões dos
+  modais. Duplo clique na linha abre share/probe/log; a roda rola listas, console e ajuda.
+- **Todas as ações:** clique direito fora de um formulário/confirmação, o botão **Menu** à
+  direita da linha de ações, ou pressione `m`. O menu usa `↑↓`, `Enter`, `Esc` e a roda do mouse.
+- **Formulários:** clique num campo de texto para focar, num campo de opção para alternar e nos
+  botões **Confirmar**/**Cancelar**. Texto continua sendo digitado pelo teclado.
+- **Modais e clique fora:** clique fora de um menu fecha o menu; em formulário/confirmação,
+  clique fora é ignorado para não perder o que foi digitado — use Cancelar/Esc.
+- **Sem mouse não perde nada:** todos os atalhos de teclado continuam disponíveis; o mouse é
+  uma camada adicional.
