@@ -56,7 +56,6 @@ class WiredMagic < Formula
   version "{tag[1:]}"
   license "MIT"
 
-  depends_on :macos
   depends_on macos: :sonoma
 {arch_dep}
   on_macos do

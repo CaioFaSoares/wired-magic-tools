@@ -37,6 +37,8 @@ class FormulaTests(unittest.TestCase):
         self.assertIn('class WiredMagic < Formula', formula)
         self.assertIn('bin.install "wm"', formula)
         self.assertIn('version "0.1.0"', formula)
+        self.assertIn('depends_on macos: :sonoma', formula)
+        self.assertNotIn('depends_on :macos', formula)
         for line in (self.assets / 'SHA256SUMS').read_text().splitlines():
             digest, name = line.split()
             self.assertIn(f'sha256 "{digest}"', formula)
