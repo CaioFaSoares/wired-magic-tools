@@ -2,10 +2,9 @@
 
 ## Estado atual
 
-- Tap público criado: <https://github.com/CaioFaSoares/homebrew-tap>, branch `main`.
-- Ainda não existe tag/release publicada. `Formula/wired-magic.rb` passa a existir na
-  primeira execução de `scripts/publish_macos.sh`; até lá `brew tap` funciona, mas
-  `brew install` não encontra a formula.
+- Tap público: <https://github.com/CaioFaSoares/homebrew-tap>, branch `main`.
+- Release `v0.1.0` publicada e `Formula/wired-magic.rb` presente no tap. `brew tap`,
+  `brew info` e `brew install` foram validados com o Homebrew 7.
 - O caminho recomendado compila e publica do seu Mac, sem gastar minutos de Actions e
   sem PAT/secret: o script usa o seu login local do `gh` para criar a release e
   atualizar o tap.
@@ -135,8 +134,10 @@ O gerador `scripts/homebrew_formula.py` só aceita arquivos tar reais contendo a
 `wm` executável e confere `SHA256SUMS` antes de emitir a formula. Ele suporta as duas
 arquiteturas (default) ou uma só (`--archs arm64|x86_64`), gerando `depends_on arch:`
 para o caso single-arch. `--existing` compara versões estáveis numericamente e recusa
-downgrade. A fórmula usa `depends_on macos: :sonoma` sozinho; o Homebrew 7 rejeita a
-combinação dessa versão com `depends_on :macos` no topo.
+downgrade. A fórmula declara `depends_on :macos` no topo e
+`depends_on macos: :sonoma` dentro de `on_macos`; o Homebrew 7 rejeita a versão fora
+desse bloco. O spec padrão (URL `arm64`) existe para a validação do tap em Linux, mas
+o requisito macOS impede a instalação fora do macOS.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_homebrew_formula.py' -v

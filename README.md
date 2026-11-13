@@ -40,10 +40,10 @@ flowchart LR
 
 O tap público é [CaioFaSoares/homebrew-tap](https://github.com/CaioFaSoares/homebrew-tap)
 e a instalação é `brew tap CaioFaSoares/tap && brew install CaioFaSoares/tap/wired-magic`
-(detalhes em [Homebrew](docs/homebrew.md)). A formula só aparece depois da primeira
-release publicada por `scripts/publish_macos.sh`; os binários de demonstração em `dist/`
-não são releases do tap. A publicação local não gasta minutos do GitHub Actions; o
-workflow macOS é apenas um fallback manual.
+(detalhes em [Homebrew](docs/homebrew.md)). A release `v0.1.0` já está publicada e a
+fórmula está no tap; novas versões entram no tap pelo mesmo script. Os binários de
+demonstração em `dist/` não são releases do tap. A publicação local não gasta minutos
+do GitHub Actions; o workflow macOS é apenas um fallback manual.
 
 ```sh
 git status                      # a árvore precisa estar limpa
