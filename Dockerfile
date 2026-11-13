@@ -36,6 +36,8 @@ ARG TARGETARCH
 # ou seja, /src/web/dist. O dist é gerado no estágio anterior.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# wm-ext embeds built-in manifests/scripts with include_str! at compile time.
+COPY extensions ./extensions
 COPY --from=web /web/dist ./web/dist
 
 # Downloads e compilação sobrevivem à invalidação da camada por mudanças de código.

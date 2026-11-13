@@ -28,7 +28,9 @@ deploy/
 examples/
 scripts/
 migrations/
-README.md
+/README.md
+# wm-ext embeds this documentation along with its built-in manifests/scripts.
+!extensions/README.md
 Makefile
 
 # Config local do Docker usada apenas para builds neste workspace.
