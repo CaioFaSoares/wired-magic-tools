@@ -124,6 +124,7 @@ fi
 TARGET_COMMIT=""
 if [ "$FROM_RELEASE" -eq 0 ]; then
     TARGET_COMMIT="$(git rev-parse "$RELEASE_TARGET^{commit}")"
+    [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "não foi possível resolver $RELEASE_TARGET para um SHA de commit"
     if [ "$DRY_RUN" -eq 0 ]; then
         gh api "repos/$ORIGIN_REPO/commits/$TARGET_COMMIT" >/dev/null 2>&1 \
             || die "o commit $TARGET_COMMIT não existe em $ORIGIN_REPO; faça push antes de publicar"
@@ -366,7 +367,7 @@ if [ "$FROM_RELEASE" -eq 0 ]; then
         [ "$remote_tag_commit" = "$TARGET_COMMIT" ] || die "a tag remota $TAG não aponta para $TARGET_COMMIT; recusei publicar assets de outro commit"
         release_args+=(--verify-tag)
     else
-        release_args+=(--target "$RELEASE_TARGET")
+        release_args+=(--target "$TARGET_COMMIT")
     fi
     log "publicando release $TAG"
     gh release create "$TAG" "${release_args[@]}" \
