@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::TableState;
 use uuid::Uuid;
@@ -87,6 +88,106 @@ impl Level {
             "out" => Level::Output,
             _ => Level::Info,
         }
+    }
+}
+
+/// Everything a mouse click can trigger. Buttons, tabs, table rows, modal
+/// fields and menu entries all register one of these while drawing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MouseAction {
+    Tab(usize),
+    SelectPeer(usize),
+    SelectShare(usize),
+    SelectJob(usize),
+    OpenMenu,
+    MenuSelect(usize),
+    MenuClose,
+    Join,
+    StartAgent,
+    StopAgent,
+    RestartAgent,
+    ToggleAutoStart,
+    AgentSettings,
+    AgentLog,
+    Doctor,
+    InstallService,
+    UninstallService,
+    ServiceStatus,
+    NewShare,
+    OpenShare,
+    CopyShare,
+    RenameShare,
+    ToggleShare,
+    DeleteShare,
+    Ping,
+    Probe,
+    Reconnect,
+    CopyPeer,
+    RenameNode,
+    OpenGui,
+    CloseGui,
+    AdminPanel,
+    StopSelectedJob,
+    JobLog,
+    OpenConsole,
+    ClearConsole,
+    Quit,
+    FormFocus(usize),
+    FormCycle(usize, bool),
+    FormToggle(usize),
+    FormSubmit,
+    FormCancel,
+    ConfirmYes,
+    ConfirmNo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HitRegion {
+    pub rect: Rect,
+    pub action: MouseAction,
+}
+
+#[derive(Debug, Clone)]
+pub struct MenuItem {
+    pub label: String,
+    pub action: MouseAction,
+}
+
+#[derive(Debug)]
+pub struct Menu {
+    pub items: Vec<MenuItem>,
+    pub selected: usize,
+    pub offset: usize,
+}
+
+impl Menu {
+    pub fn new(items: Vec<MenuItem>) -> Self {
+        Self {
+            items,
+            selected: 0,
+            offset: 0,
+        }
+    }
+
+    pub fn move_selection(&mut self, delta: isize) {
+        if self.items.is_empty() {
+            return;
+        }
+        let last = self.items.len() as isize - 1;
+        let next = (self.selected as isize + delta).clamp(0, last);
+        self.selected = next as usize;
+    }
+
+    pub fn home(&mut self) {
+        self.selected = 0;
+    }
+
+    pub fn end(&mut self) {
+        self.selected = self.items.len().saturating_sub(1);
+    }
+
+    pub fn selected_action(&self) -> Option<MouseAction> {
+        self.items.get(self.selected).map(|item| item.action.clone())
     }
 }
 
@@ -289,6 +390,7 @@ pub enum ConfirmAction {
     StopAgent,
     RestartAgent,
     StopJob(u32),
+    DeleteShare(Uuid),
     InstallService,
     UninstallService,
 }
@@ -339,6 +441,14 @@ pub struct App {
     pub input: Option<Input>,
     pub form: Option<Form>,
     pub confirm: Option<Confirm>,
+    pub menu: Option<Menu>,
+    pub hits: Vec<HitRegion>,
+    pub overlay_hits: Vec<HitRegion>,
+    pub mouse: Option<(u16, u16)>,
+    pub last_click: Option<(Instant, u16, u16)>,
+    pub tabs_rect: Rect,
+    pub body_rect: Rect,
+    pub actions_rect: Rect,
     pub delete_armed: Option<(Uuid, Instant)>,
     pub restart_pending: bool,
     pub children: Vec<u32>,
@@ -392,6 +502,14 @@ impl App {
             input: None,
             form: None,
             confirm: None,
+            menu: None,
+            hits: Vec::new(),
+            overlay_hits: Vec::new(),
+            mouse: None,
+            last_click: None,
+            tabs_rect: Rect::default(),
+            body_rect: Rect::default(),
+            actions_rect: Rect::default(),
             delete_armed: None,
             restart_pending: false,
             children: Vec::new(),
@@ -619,6 +737,45 @@ impl App {
         }
     }
 
+    pub fn clear_hits(&mut self) {
+        self.hits.clear();
+        self.overlay_hits.clear();
+    }
+
+    pub fn register_hit(&mut self, rect: Rect, action: MouseAction) {
+        if rect.width > 0 && rect.height > 0 {
+            self.hits.push(HitRegion { rect, action });
+        }
+    }
+
+    pub fn register_overlay_hit(&mut self, rect: Rect, action: MouseAction) {
+        if rect.width > 0 && rect.height > 0 {
+            self.overlay_hits.push(HitRegion { rect, action });
+        }
+    }
+
+    pub fn modal_open(&self) -> bool {
+        self.form.is_some() || self.confirm.is_some() || self.menu.is_some()
+    }
+
+    pub fn hit_test(&self, column: u16, row: u16, overlay: bool) -> Option<MouseAction> {
+        let regions = if overlay {
+            &self.overlay_hits
+        } else {
+            &self.hits
+        };
+        regions
+            .iter()
+            .rev()
+            .find(|hit| rect_contains(hit.rect, column, row))
+            .map(|hit| hit.action.clone())
+    }
+
+    pub fn mouse_inside(&self, rect: Rect) -> bool {
+        self.mouse
+            .is_some_and(|(column, row)| rect_contains(rect, column, row))
+    }
+
     pub fn scroll_console(&mut self, delta: isize) {
         let max = self.console.len().saturating_sub(1);
         let next = (self.console_scroll as isize + delta).clamp(0, max as isize);
@@ -817,6 +974,13 @@ impl App {
             }
         }
     }
+}
+
+pub fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    column >= rect.x
+        && column < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
 }
 
 pub fn join_form() -> Form {
