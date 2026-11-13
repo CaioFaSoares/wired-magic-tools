@@ -1,0 +1,18 @@
+# Manifesto de exemplo: sidecar declarativo `hello`.
+#
+# Copie este diretório para <data_dir>/extensions/hello e use
+# "Recarregar manifestos" no painel. O comando abaixo é um exemplo; troque
+# pelo binário real e configure por nó na tela da extensão.
+id = "hello"
+name = "Hello Sidecar"
+version = "0.1.0"
+description = "Exemplo de extensão declarativa que roda um processo supervisionado no nó."
+author = "operação"
+node_driver = "exec"
+ui = "generic"
+
+[config_example]
+command = "/usr/local/bin/hello"
+args = ["--port", "9000"]
+restart = "on_failure"
+public_urls = ["https://hello.example.com"]

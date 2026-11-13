@@ -1,0 +1,80 @@
+# Deploy de um compose para Coolify (ou `docker compose up -d` numa VPS Linux).
+#
+# O Coolify cuida do TLS e do domínio: aponte o domínio para o serviço `wm` na
+# porta interna 8080. As portas UDP são publicadas direto pelo Docker porque o
+# proxy HTTP não transporta STUN/WireGuard.
+#
+# Variáveis obrigatórias (configure no Coolify em Environment Variables, ou
+# copie .env.example para .env num teste local):
+#   WM_PUBLIC_URL      URL pública, sem :8080 — ex.: https://mesh.exemplo.com
+#   WM_ADMIN_PASSWORD  senha inicial do admin (só vale no primeiro start)
+#
+# Opcional:
+#   WM_NODE_NAME       nome do nó gateway no painel (padrão: gateway)
+
+services:
+  wm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    hostname: wired-magic
+
+    # `wm host` sobe control plane + relay + STUN + o nó gateway .1. O data dir
+    # é o volume; o control fica em /data/control e o agente em /data.
+    command:
+      - host
+      - --public-url
+      - ${WM_PUBLIC_URL:?defina WM_PUBLIC_URL com a URL publica, sem :8080}
+      - --listen
+      - 0.0.0.0:8080
+      - --data-dir
+      - /data
+      - --udp-port
+      - "41641"
+      - --name
+      - ${WM_NODE_NAME:-gateway}
+
+    environment:
+      WM_PUBLIC_URL: ${WM_PUBLIC_URL}
+      WM_ADMIN_PASSWORD: ${WM_ADMIN_PASSWORD:?defina WM_ADMIN_PASSWORD para o primeiro start}
+      WM_DATA_DIR: /data
+      WM_LOG: ${WM_LOG:-info}
+
+    # O proxy do Coolify alcança 8080 pela rede interna; não publicamos 8080/tcp
+    # para não expor o painel em HTTP puro. Só o que o proxy não cobre sai direto.
+    expose:
+      - "8080"
+    ports:
+      - "3478:3478/udp"   # STUN
+      - "41641:41641/udp" # endpoint WireGuard do nó gateway
+
+    volumes:
+      - wm-data:/data
+
+    # Necessário para criar a interface TUN e instalar rotas dentro do container.
+    # Sem /dev/net/tun no host, o agente não sobe; veja docs/DEPLOY-COOLIFY.md.
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    # SIGINT faz o `wm host` encerrar o control com o shutdown gracioso.
+    stop_signal: SIGINT
+    stop_grace_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  wm-data:

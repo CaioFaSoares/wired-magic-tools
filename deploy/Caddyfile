@@ -1,0 +1,11 @@
+mesh.exemplo.com {
+    encode zstd gzip
+
+    # Long-poll do mapa e SSE do painel precisam de timeouts generosos.
+    reverse_proxy 127.0.0.1:8080 {
+        transport http {
+            read_timeout 90s
+            write_timeout 90s
+        }
+    }
+}

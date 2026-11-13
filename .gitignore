@@ -1,0 +1,12 @@
+target/
+web/node_modules/
+.env
+*.log
+.DS_Store
+.cargo-home/
+target-linux/
+.pnpm-store/
+.docker/
+target-final/
+migrations/
+web/.pnpm-store/

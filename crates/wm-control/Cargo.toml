@@ -1,0 +1,45 @@
+[package]
+name = "wm-control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+wm-proto = { workspace = true }
+wm-ext = { workspace = true }
+anyhow.workspace = true
+argon2.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+axum-server.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+dashmap.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+futures-util.workspace = true
+http.workspace = true
+ipnet.workspace = true
+mime_guess.workspace = true
+rand_core.workspace = true
+rust-embed.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tower = { workspace = true, features = ["util"] }

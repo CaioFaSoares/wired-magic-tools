@@ -1,0 +1,15 @@
+[Unit]
+Description=wired-magic host (control + relay + STUN + agente)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/wm host --public-url https://mesh.exemplo.com --listen 127.0.0.1:8080 --data-dir /var/lib/wired-magic
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

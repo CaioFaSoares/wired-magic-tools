@@ -1,0 +1,19 @@
+# /etc/wired-magic/control.toml
+listen = "127.0.0.1:8080"
+public_url = "https://mesh.exemplo.com"
+# TLS direto (sem Caddy). Com Caddy, deixe vazio e escute em 127.0.0.1.
+# tls_cert = "/etc/letsencrypt/live/mesh.exemplo.com/fullchain.pem"
+# tls_key = "/etc/letsencrypt/live/mesh.exemplo.com/privkey.pem"
+data_dir = "/var/lib/wired-magic/control"
+network_name = "taua-lab"
+overlay_cidr = "10.66.0.0/24"
+dns_zone = "wm.internal"
+mtu = 1280
+approval_required = false
+relay_enabled = true
+relay_region = "vps-sa"
+# relay_url = "https://relay.exemplo.com"
+stun_enabled = true
+stun_listen = "0.0.0.0:3478"
+# stun_urls = ["stun:mesh.exemplo.com:3478"]
+# admin_password = "troque-isto"

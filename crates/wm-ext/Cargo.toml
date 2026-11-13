@@ -1,0 +1,19 @@
+[package]
+name = "wm-ext"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Extension SDK for wired-magic control-plane and node-side extensions"
+
+[dependencies]
+wm-proto = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

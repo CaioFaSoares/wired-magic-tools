@@ -1,0 +1,30 @@
+# O Dockerfile só precisa do workspace Rust e do código do painel.
+.git
+.gitignore
+.env
+*.log
+.DS_Store
+
+# Artefatos locais de build e estado.
+target/
+target-linux/
+target-final/
+.cargo-home/
+.pnpm-store/
+web/node_modules/
+web/.pnpm-store/
+web/dist/
+
+# Não entram na imagem de runtime nem no build.
+dist/
+evidence/
+docs/
+deploy/
+examples/
+scripts/
+migrations/
+README.md
+Makefile
+
+# Config local do Docker usada apenas para builds neste workspace.
+.docker/
