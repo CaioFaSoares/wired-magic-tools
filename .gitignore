@@ -4,9 +4,12 @@ web/node_modules/
 *.log
 .DS_Store
 .cargo-home/
+.rustup/
 target-linux/
 .pnpm-store/
 .docker/
 target-final/
 migrations/
 web/.pnpm-store/
+
+__pycache__/

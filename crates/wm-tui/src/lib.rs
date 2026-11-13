@@ -12,6 +12,8 @@ mod app;
 mod command;
 mod persist;
 mod ui;
+#[cfg(any(target_os = "macos", test))]
+mod updater;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -166,6 +168,8 @@ pub fn run_with(data_dir: PathBuf, options: RunOptions) -> anyhow::Result<()> {
         "TUI pronta — q sai e mantém o agente ativo em segundo plano",
     );
     maybe_auto_start(&mut app, &tx, options.no_auto_start);
+    #[cfg(target_os = "macos")]
+    updater::start(tx.clone());
     app.save();
     app.last_save = Instant::now();
 

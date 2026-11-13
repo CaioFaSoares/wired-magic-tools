@@ -36,6 +36,29 @@ flowchart LR
   S --- G
 ```
 
+## macOS: Homebrew e atualizações sem interromper a TUI
+
+O tap público é [CaioFaSoares/homebrew-tap](https://github.com/CaioFaSoares/homebrew-tap)
+e a instalação é `brew tap CaioFaSoares/tap && brew install CaioFaSoares/tap/wired-magic`
+(detalhes em [Homebrew](docs/homebrew.md)). A formula só aparece depois da primeira
+release publicada por `scripts/publish_macos.sh`; os binários de demonstração em `dist/`
+não são releases do tap. A publicação local não gasta minutos do GitHub Actions; o
+workflow macOS é apenas um fallback manual.
+
+```sh
+git status                      # a árvore precisa estar limpa
+scripts/publish_macos.sh --tag v0.1.0 --dry-run
+# commit + git push, e então:
+scripts/publish_macos.sh --tag v0.1.0
+```
+
+Ao abrir `wm tui` instalado pelo tap, a TUI verifica e instala versões estáveis mais
+novas em segundo plano via Homebrew, com aviso no console/notificações. A sessão e o
+agente continuam na versão atual; a nova versão entra na próxima abertura, sem reinício
+forçado. Use `WM_NO_AUTO_UPDATE=1 wm tui` para desativar. Fórmulas fixadas com `brew pin`
+são respeitadas. Sob `sudo`, a TUI apenas orienta atualizar como usuário normal: nunca
+executa Homebrew como root. Builds locais e instalações fora do Homebrew não são alterados.
+
 ## O que você ganha
 
 - **Um binário, todos os papéis.** `wm host` sobe control plane, relay, STUN e o nó local em um

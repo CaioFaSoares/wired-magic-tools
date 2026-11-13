@@ -4518,6 +4518,7 @@ dependencies = [
  "chrono",
  "libc",
  "ratatui",
+ "semver",
  "serde",
  "serde_json",
  "tokio",

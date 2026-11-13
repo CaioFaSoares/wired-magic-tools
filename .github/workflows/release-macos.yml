@@ -1,0 +1,113 @@
+name: Release macOS (manual fallback)
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing stable tag to build and publish (vX.Y.Z)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Validate stable tag and package version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          tag = os.environ['TAG']
+          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+              raise SystemExit('Only stable vMAJOR.MINOR.PATCH tags are supported')
+          with open('Cargo.toml', 'rb') as f:
+              version = tomllib.load(f)['workspace']['package']['version']
+          if tag != 'v' + version:
+              raise SystemExit('Tag must match Cargo workspace version')
+          PY
+      - run: python3 -m unittest discover -s scripts -p 'test_homebrew_formula.py' -v
+      - run: bash -n scripts/publish_macos.sh
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - name: Build embedded web assets
+        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web build
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.94.0 --profile minimal --target '${{ matrix.target }}'
+      - name: Build and smoke test native binary
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ inputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          cargo +1.94.0 build --locked --release -p wired-magic --bin wm --target "$TARGET"
+          binary="target/$TARGET/release/wm"
+          "$binary" --version | tee version.txt
+          test "$("$binary" --version)" = "wm ${TAG#v}"
+          "$binary" --help >/dev/null
+          mkdir -p release-stage release-assets
+          cp "$binary" release-stage/wm
+          tar -czf "release-assets/wired-magic-$TAG-darwin-$ARCH.tar.gz" -C release-stage wm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: release-assets/*.tar.gz
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macos-*
+          merge-multiple: true
+          path: release-assets
+      - name: Hash archives and generate verified formula
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          (cd release-assets && sha256sum "wired-magic-$TAG-darwin-arm64.tar.gz" "wired-magic-$TAG-darwin-x86_64.tar.gz" > SHA256SUMS)
+          python3 scripts/homebrew_formula.py --repository "$GITHUB_REPOSITORY" --tag "$TAG" --assets release-assets --output release-assets/wired-magic.rb
+          (cd release-assets && sha256sum -c SHA256SUMS)
+      - name: Publish immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes
