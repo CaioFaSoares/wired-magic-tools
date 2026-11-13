@@ -800,6 +800,28 @@ impl AgentConfig {
     }
 }
 
+// Retry transient conflicts before asking the OS for a free port. Never kill
+// the owner: it may be another VPN or an agent using a different data directory.
+async fn bind_agent_udp(port: u16) -> anyhow::Result<UdpSocket> {
+    for attempt in 0..4 {
+        match UdpSocket::bind(("0.0.0.0", port)).await {
+            Ok(socket) => return Ok(socket),
+            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+                if attempt < 3 {
+                    tracing::warn!(port, "porta UDP ocupada; tentando novamente");
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+            Err(err) => return Err(err).with_context(|| format!("bind UDP 0.0.0.0:{port}")),
+        }
+    }
+    let socket = UdpSocket::bind(("0.0.0.0", 0)).await
+        .context("não foi possível selecionar uma porta UDP livre")?;
+    tracing::warn!(requested_port = port, actual_port = socket.local_addr()?.port(),
+        "porta UDP continua ocupada (possivelmente outra VPN); usando porta livre sem encerrar outros processos");
+    Ok(socket)
+}
+
 async fn run_inner(
     cfg: AgentConfig,
     state: NodeState,
@@ -807,11 +829,8 @@ async fn run_inner(
     _pid_path: PathBuf,
     shutdown: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let socket = Arc::new(
-        UdpSocket::bind(("0.0.0.0", cfg.udp_port))
-            .await
-            .with_context(|| format!("bind UDP 0.0.0.0:{}", cfg.udp_port))?,
-    );
+    let socket = Arc::new(bind_agent_udp(cfg.udp_port).await?);
+    let udp_port = socket.local_addr()?.port();
     let (tun_dev, _route_guard) = tun::create(&cfg, state.overlay_ip, state.overlay_cidr)?;
     let tun_name = tun_dev.name.clone();
     let (tun_sink, tun_stream) = tun_dev.framed.split();
@@ -831,7 +850,7 @@ async fn run_inner(
     let (relay_info_tx, relay_info_rx) = watch::channel::<Option<RelayInfo>>(None);
     let (relay_out_tx, relay_out_rx) = mpsc::channel::<Vec<u8>>(2048);
     let relay_connected = Arc::new(AtomicBool::new(false));
-    let snapshot = Arc::new(RwLock::new(initial_snapshot(&state, &tun_name, cfg.udp_port)));
+    let snapshot = Arc::new(RwLock::new(initial_snapshot(&state, &tun_name, udp_port)));
     let (stun_urls_tx, stun_urls_rx) = watch::channel::<Vec<String>>(Vec::new());
     let expose_specs = if cfg.expose.is_empty() {
         state.expose.clone()
@@ -884,7 +903,7 @@ async fn run_inner(
         stun_rx,
         control.clone(),
         state.node_token.clone(),
-        cfg.udp_port,
+        udp_port,
         stun_urls_rx,
         cmd_tx.clone(),
     )));
@@ -941,7 +960,7 @@ async fn run_inner(
         control_connected: false,
         last_error: None,
         tun_name,
-        udp_port: cfg.udp_port,
+        udp_port,
         nat_type: NatType::Unknown,
         last_snapshot: Instant::now(),
         pending_pings: HashMap::new(),
@@ -1266,6 +1285,38 @@ fn _unused(_: SelfInfo, _: ControlEvent, _: PeerInfo) {}
 mod tests {
     use super::*;
     use wm_proto::{AclAction, CompiledRule, PortRange};
+
+    #[tokio::test]
+    async fn udp_bind_recovers_without_disrupting_port_owner() {
+        let owner = UdpSocket::bind(("0.0.0.0", 0)).await.unwrap();
+        let port = owner.local_addr().unwrap().port();
+        let recovered = bind_agent_udp(port).await.unwrap();
+        assert_ne!(recovered.local_addr().unwrap().port(), port);
+        recovered.send_to(b"alive", ("127.0.0.1", port)).await.unwrap();
+        let mut buf = [0; 16];
+        let (n, _) = tokio::time::timeout(Duration::from_secs(1), owner.recv_from(&mut buf))
+            .await.unwrap().unwrap();
+        assert_eq!(&buf[..n], b"alive");
+    }
+
+    #[tokio::test]
+    async fn udp_bind_reuses_requested_port_after_transient_conflict() {
+        let owner = UdpSocket::bind(("0.0.0.0", 0)).await.unwrap();
+        let port = owner.local_addr().unwrap().port();
+        let binding = bind_agent_udp(port);
+        let release = async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            drop(owner);
+        };
+        let (socket, _) = tokio::join!(binding, release);
+        assert_eq!(socket.unwrap().local_addr().unwrap().port(), port);
+    }
+
+    #[tokio::test]
+    async fn udp_bind_zero_reports_real_port() {
+        let socket = bind_agent_udp(0).await.unwrap();
+        assert_ne!(socket.local_addr().unwrap().port(), 0);
+    }
 
     #[test]
     fn restrictive_map_invalidates_continuously_refreshed_tcp_udp_and_icmp() {
