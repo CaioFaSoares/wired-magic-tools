@@ -4378,7 +4378,7 @@ dependencies = [
 
 [[package]]
 name = "wired-magic"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -4409,7 +4409,7 @@ checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
 name = "wm-control"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4449,7 +4449,7 @@ dependencies = [
 
 [[package]]
 name = "wm-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4485,7 +4485,7 @@ dependencies = [
 
 [[package]]
 name = "wm-ext"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4499,7 +4499,7 @@ dependencies = [
 
 [[package]]
 name = "wm-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4512,7 +4512,7 @@ dependencies = [
 
 [[package]]
 name = "wm-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
