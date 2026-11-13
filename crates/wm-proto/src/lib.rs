@@ -156,6 +156,10 @@ pub struct NetworkMap {
     /// `enabled` before offering them.
     #[serde(default)]
     pub shares: Vec<ShareInfo>,
+    /// Loopback services that active extensions ask this node to publish on
+    /// its overlay address. Local `--expose` specs are merged by the agent.
+    #[serde(default)]
+    pub exposes: Vec<MeshExpose>,
     pub server_time: DateTime<Utc>,
 }
 
@@ -175,15 +179,95 @@ pub struct ExtensionDesired {
     pub id: String,
     pub name: String,
     pub driver: String,
+    #[serde(default)]
+    pub version: String,
     /// Monotonic revision for this node's slice. The agent uses it to decide
     /// when to restart a sidecar even if `config` is byte-identical (e.g. an
     /// explicit "restart" action).
     pub revision: u64,
+    /// Bumped only when the operator activates/deactivates this extension for
+    /// the node. Hooks react to this, not to every config edit.
+    #[serde(default)]
+    pub activation_revision: u64,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Lifecycle hooks declared by the manifest. Commands run on the node
+    /// before/after the driver and are trusted admin content.
+    #[serde(default)]
+    pub hooks: ExtensionHooks,
     /// Extension-owned JSON. Never interpreted by the agent host.
     #[serde(default)]
     pub config: serde_json::Value,
+}
+
+/// One command run by the node at an extension lifecycle boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct HookSpec {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default = "default_hook_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub working_dir: Option<String>,
+}
+
+pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 120;
+
+fn default_hook_timeout() -> u64 {
+    DEFAULT_HOOK_TIMEOUT_SECS
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ExtensionHooks {
+    /// Run once per (node, extension version); success is remembered under the
+    /// agent data directory.
+    #[serde(default)]
+    pub install: Option<HookSpec>,
+    /// Run when the extension becomes active (or its activation revision
+    /// changes), before the sidecar starts.
+    #[serde(default)]
+    pub activate: Option<HookSpec>,
+    /// Run when the extension stops being active (or is removed), after the
+    /// sidecar stops.
+    #[serde(default)]
+    pub deactivate: Option<HookSpec>,
+}
+
+/// A loopback service exposed on the node's overlay address by an adapter.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MeshExpose {
+    pub overlay_port: u16,
+    pub local_port: u16,
+}
+
+/// Catalog entry shown by the TUI/local GUI for one extension on this node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeExtensionView {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub driver: String,
+    #[serde(default)]
+    pub ui: String,
+    #[serde(default)]
+    pub builtin: bool,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub configured: bool,
+    #[serde(default)]
+    pub activation_revision: u64,
+    #[serde(default)]
+    pub default_config: bool,
+    #[serde(default)]
+    pub status: Option<ExtensionStatus>,
 }
 
 fn default_true() -> bool {

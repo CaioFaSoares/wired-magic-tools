@@ -74,19 +74,31 @@ do agente. O fluxo de build continua no WSS e não depende desta API.
 ## 4. Expor o Baguette (loopback)
 
 O Baguette escuta em `127.0.0.1:8421`; WireGuard não faz um serviço loopback aparecer no
-overlay. No Mac:
+overlay. A extensão **Seance** automatiza montagem, share, labels e expose:
+
+```sh
+# no Mac, depois de instalar o binário do wm:
+sudo wm extensions enable seance
+```
+
+O manifesto (`extensions/seance/extension.toml`) roda o hook de instalação, inicia
+`seance-agent`, publica `baguette-<nó>` e cria um listener `10.66.0.12:8421` →
+`127.0.0.1:8421`, sujeito à ACL. A ativação também pode ser feita na TUI (`aba Extensões`,
+`Enter`) ou no painel.
+
+Fallback manual, sem a extensão:
 
 ```sh
 sudo wm join https://mesh.exemplo.com --token wmj_... --name mac-01 \
   --tag mac --label baguette_port=8421 --expose 8421
 ```
 
-Isso cria um listener `10.66.0.12:8421` que projeta para `127.0.0.1:8421`, sujeito à ACL. O
-painel/Seance podem então usar `http://10.66.0.12:8421` como endpoint de **operador** (nunca
-exponha isso ao navegador do aluno; o Seance deve proxear server-side).
+Isso cria o mesmo listener, mas não instala nem supervisiona o agente do Seance. Nos dois
+casos o painel/Seance usam `http://10.66.0.12:8421` como endpoint de **operador** (nunca
+exponha ao navegador do aluno; o Seance deve proxear server-side).
 
-Sem `--expose`, use `network_mode: host` no Seance? Não resolve o loopback no Mac; o correto é
-expor a porta no nó.
+Sem expose, `network_mode: host` no Seance não resolve o loopback no Mac; o correto é expor a
+porta no nó.
 
 ## 5. Container do Seance na VPS
 
@@ -115,7 +127,8 @@ Teste do container: `curl http://10.66.0.12:8421/simulators.json`.
 
 - [ ] Service token criado e guardado fora do front do aluno.
 - [ ] `GET /integration/nodes?online=true` responde e casa nomes com o hub WSS.
-- [ ] `labels.baguette_port` presente nos Macs (`--label` + `--expose`).
+- [ ] `wm extensions enable seance` nos Macs (ou fallback `--label` + `--expose`);
+      `labels.baguette_port` e o share `baguette-<nó>` aparecem no mapa.
 - [ ] URL do Baguette usada só server-side.
 - [ ] Container alcança `10.66.0.x` (teste com curl).
 - [ ] Falha do control tratada como degradação, não como queda do build.

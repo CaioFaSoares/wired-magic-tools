@@ -411,3 +411,131 @@ async fn generic_extension_config_requires_exec_validation() {
     assert_eq!(hello.driver, "exec");
     assert_eq!(hello.config["command"], "hello-sidecar");
 }
+
+
+#[tokio::test]
+async fn node_token_can_toggle_extension_activation() {
+    let (_dir, state) = boot().await;
+    let app = wm_control::api::router(state.clone());
+    let node_token = auth::random_token("wmn_").unwrap();
+    let node = db::create_node(
+        &state.db,
+        "mac-toggle",
+        "mac-toggle.local",
+        "linux",
+        "x86_64",
+        "0.1.0",
+        &STANDARD.encode([11u8; 32]),
+        &[],
+        &Default::default(),
+        NodeStatus::Active,
+        "test",
+        &auth::hash_token(&node_token),
+        state.overlay,
+    )
+    .await
+    .unwrap();
+
+    let (status, catalog) = request(
+        &app,
+        "GET",
+        "/api/v1/node/extensions",
+        None,
+        Some(&node_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    let cloudflared = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["id"] == "cloudflared")
+        .unwrap();
+    assert_eq!(cloudflared["active"], false);
+
+    let (status, view) = request(
+        &app,
+        "PUT",
+        "/api/v1/node/extensions/cloudflared",
+        None,
+        Some(&node_token),
+        Some(json!({"active": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["active"], true);
+
+    let (_, map_value) = request(
+        &app,
+        "GET",
+        "/api/v1/map?version=0&wait=1",
+        None,
+        Some(&node_token),
+        None,
+    )
+    .await;
+    let map: NetworkMap = serde_json::from_value(map_value).unwrap();
+    assert!(map.extensions.iter().any(|desired| desired.id == "cloudflared"));
+    assert_eq!(node.uuid().to_string().len(), 36);
+}
+
+
+#[tokio::test]
+async fn admin_can_activate_an_extension_for_a_node() {
+    let (_dir, state) = boot().await;
+    let app = wm_control::api::router(state.clone());
+    let admin = login(&app).await;
+    let token = auth::random_token("wmn_").unwrap();
+    let node = db::create_node(
+        &state.db,
+        "mac-admin-seance",
+        "mac-admin-seance.local",
+        "linux",
+        "x86_64",
+        "0.1.0",
+        &STANDARD.encode([12u8; 32]),
+        &[],
+        &Default::default(),
+        NodeStatus::Active,
+        "test",
+        &auth::hash_token(&token),
+        state.overlay,
+    )
+    .await
+    .unwrap();
+
+    let (status, view) = request(
+        &app,
+        "PUT",
+        &format!(
+            "/api/v1/admin/extensions/seance/nodes/{}/activation",
+            node.uuid()
+        ),
+        Some(&admin),
+        None,
+        Some(json!({"active": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["node_id"], node.uuid().to_string());
+    assert_eq!(view["active"], true);
+
+    let (status, detail) = request(
+        &app,
+        "GET",
+        "/api/v1/admin/extensions/seance",
+        Some(&admin),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let node_view = detail["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["node_id"] == node.uuid().to_string())
+        .unwrap();
+    assert_eq!(node_view["active"], true);
+}

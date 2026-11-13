@@ -92,6 +92,13 @@ ser exposto assim se continuar em loopback.
 6. Revisar `--expose`; manter Baguette e outros serviços sensíveis atrás de ACL e, de
    preferência, de autenticação própria.
 7. Rodar `cargo deny`/`pnpm audit` e revisar dependências antes de release.
+8. Tratar manifestos de extensão como units de root: hooks `install`/`activate`/
+   `deactivate` rodam sem sandbox com o privilégio do agente. Só instale manifestos
+   revisados; a ativação por nó (TUI/token do nó) só escolhe entre manifestos já
+   instalados pelo admin.
+9. Revisar `NetworkMap.exposes`/adapter shares: um manifesto ativo publica portas
+   loopback no overlay. Mantenha ACL restrita e não use adapters para serviços que
+   deveriam continuar exclusivos do host.
 
 ## Lacunas conhecidas
 
@@ -109,3 +116,10 @@ ser exposto assim se continuar em loopback.
 - Sem auditoria de leitura de metadados nem de sessões de relay.
 - A API de integração expõe IPs/nomes a quem tiver o service token; trate-o como credencial.
 - `wm host` em dev sem TLS não deve ser exposto na internet.
+- Hooks de extensão não têm sandbox, seccomp, cgroup ou limite de saída de rede; o
+  timeout limita duração, não o que o script pode fazer. A ativação é decisão do
+  membro do nó, mas o manifesto é decisão do admin — os dois controles são
+  necessários.
+- Exposes de adapter são TCP e ficam abertos no IP do overlay enquanto a extensão
+  está ativa; a ACL do data plane é a única barreira de rede. Shares de adapter
+  são globais ao control e não têm ACL por share nesta versão.

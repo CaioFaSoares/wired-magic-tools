@@ -310,6 +310,8 @@ export interface ExtensionNodeView {
   overlay_ip: string;
   online: boolean;
   enabled: boolean;
+  active: boolean;
+  activation_revision: number;
   revision: number;
   config: unknown;
   status?: ExtensionStatus | null;
@@ -357,6 +359,8 @@ export interface CloudflaredNodeView {
   hostname: string;
   overlay_ip: string;
   online: boolean;
+  active: boolean;
+  activation_revision: number;
   binary: string;
   tunnel_id?: string | null;
   has_credentials: boolean;

@@ -4,6 +4,8 @@
 **Escopo:** como o runtime de extensões funciona, como o cloudflared é integrado e
 como criar novas extensões.
 **Relacionado:** [ADR 0006](adr/0006-extension-runtime.md) ·
+[ADR 0007](adr/0007-hooks-adapters.md) ·
+[hooks-adapters.md](hooks-adapters.md) ·
 [RESEARCH §3](RESEARCH.md#3-control-plane-e-mapa-por-long-poll) ·
 [RESEARCH §7](RESEARCH.md#7-relay-wss)
 
@@ -38,6 +40,12 @@ O `NetworkMap` carrega a lista **autoritativa** de extensões daquele nó:
 uma extensão ausente da lista deve parar. O agente compara `revision`, `enabled`
 e o JSON de `config`; se nada mudou, não reinicia o sidecar, mesmo quando a
 versão do mapa muda por causa de peers ou ACL.
+
+**Ativação é por nó.** Extensões node-side começam inativas em nós novos; a TUI
+(`aba Extensões`, `Enter/t`), o painel web e a API alternam. Manifestos podem
+declarar `default_config` para que ativar já materialize a config. Hooks e
+adapters são detalhados em [hooks-adapters.md](hooks-adapters.md); a extensão
+`seance` é a receita de referência para montar um produto no nó.
 
 O `ReportRequest` devolve o estado observado. O control guarda a última foto em
 `extension_status`, o painel faz merge e o SSE invalida as consultas. O
@@ -98,6 +106,10 @@ Regras:
 - Campos desconhecidos no TOML são rejeitados para evitar knob silencioso.
 - `ui = "cloudflared"` faz o painel React renderizar o gerenciador de rotas; os
   demais usam o editor genérico de JSON.
+- `default_active = false` mantém a extensão no catálogo, mas sem rodar até ser
+  ativada no nó (cloudflared e seance usam o fallback de compatibilidade).
+- `default_config`, `hooks` e `[adapter]` são opcionais; veja
+  [hooks-adapters.md](hooks-adapters.md).
 - O loader não é hot-reload de código: `POST /api/v1/admin/extensions/reload`
   relê manifestos e configurações, mas o binário do control não muda.
 
@@ -118,9 +130,9 @@ Regras:
    }
    ```
 
-4. O control incrementa a versão do mapa; o agente baixa a nova config, valida
-   e inicia o processo. O painel mostra `starting` → `running` (ou `error` com
-   a última linha).
+4. Ative a extensão no nó (TUI/painel/API). O control incrementa a versão do
+   mapa; o agente baixa a nova config, roda hooks e inicia o processo. O painel
+   mostra `starting` → `running` (ou `error` com a última linha).
 5. `restart` aceita `always`, `on_failure` (default) e `never`. O agente usa
    backoff de 1 s a 30 s e reseta o backoff após 60 s de vida do processo.
 
@@ -347,6 +359,9 @@ Mesmo sem código, toda extensão ganha:
 | GET | `/api/v1/admin/extensions/{id}/nodes/{node_id}/config` |
 | PUT | `/api/v1/admin/extensions/{id}/nodes/{node_id}/config` |
 | DELETE | `/api/v1/admin/extensions/{id}/nodes/{node_id}/config` |
+| PUT | `/api/v1/admin/extensions/{id}/nodes/{node_id}/activation` |
+| GET | `/api/v1/node/extensions` |
+| PUT | `/api/v1/node/extensions/{id}` |
 
 Extensões code-backed podem recusar a config genérica e expor a própria API
 (como o cloudflared).
@@ -402,3 +417,45 @@ imprime uma URL `trycloudflare.com` e valida o parsing e a reconciliação.
 - Remover o manifesto/extensão para o sidecar, mas não apaga credenciais ou
   configs já gravadas em `<data_dir>/extensions/cloudflared/` no nó; limpe esse
   diretório manualmente se o segredo sair de uso.
+
+
+---
+
+## 8. Ativação, hooks e adapters
+
+Desde o ADR 0007, `extension.toml` pode declarar:
+
+```toml
+default_active = false
+
+[default_config]
+command = "/usr/local/bin/meu-agente"
+args = ["--port", "9000"]
+
+[hooks.install]
+command = "{extension_dir}/install.sh"
+timeout_secs = 300
+
+[hooks.activate]
+command = "{extension_dir}/activate.sh"
+
+[hooks.deactivate]
+command = "{extension_dir}/deactivate.sh"
+
+[adapter]
+labels = { produto = "meu-produto" }
+exposes = [{ overlay_port = 9000, local_port = 9000 }]
+
+[[adapter.shares]]
+name = "meu-produto-{node}"
+port = 9000
+kind = "web"
+protocol = "tcp"
+```
+
+O ciclo completo — quando cada hook roda, variáveis `WM_*`, placeholders,
+propriedade de shares, exposes dinâmicos e a receita do Seance — está em
+[hooks-adapters.md](hooks-adapters.md). A pasta [`extensions/`](../extensions/)
+no repositório é a fonte de verdade dos bundlados; o control semeia
+`<data_dir>/extensions/` no boot sem sobrescrever manifestos editados (scripts
+embutidos de hook são arquivos gerenciados e atualizados).

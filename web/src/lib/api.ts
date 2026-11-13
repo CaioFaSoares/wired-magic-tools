@@ -331,6 +331,17 @@ export const api = {
     );
   },
 
+  setExtensionActivation(
+    id: string,
+    nodeId: string,
+    active: boolean,
+  ): Promise<ExtensionNodeView> {
+    return request<ExtensionNodeView>(
+      `/admin/extensions/${encodeURIComponent(id)}/nodes/${encodeURIComponent(nodeId)}/activation`,
+      { method: "PUT", body: { active } },
+    );
+  },
+
   deleteExtensionNodeConfig(id: string, nodeId: string): Promise<ApiOk> {
     return request<ApiOk>(
       `/admin/extensions/${encodeURIComponent(id)}/nodes/${encodeURIComponent(nodeId)}/config`,

@@ -267,6 +267,19 @@ pub async fn get_status(
     .await?)
 }
 
+pub async fn delete_status(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: NodeId,
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM extension_status WHERE extension_id = ? AND node_id = ?")
+        .bind(extension_id)
+        .bind(node_id.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn list_statuses(
     pool: &SqlitePool,
     extension_id: &str,
@@ -682,4 +695,196 @@ mod tests {
         delete_route(&pool, created.uuid()).await.unwrap();
         assert!(get_route(&pool, created.uuid()).await.unwrap().is_none());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-node activation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct ActivationRow {
+    pub extension_id: String,
+    pub node_id: String,
+    pub enabled: i64,
+    pub revision: i64,
+    pub updated_at: i64,
+    pub updated_by: Option<String>,
+}
+
+impl_from_row!(ActivationRow {
+    extension_id,
+    node_id,
+    enabled,
+    revision,
+    updated_at,
+    updated_by,
+});
+
+impl ActivationRow {
+    pub fn enabled(&self) -> bool {
+        self.enabled != 0
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision.max(0) as u64
+    }
+}
+
+pub async fn get_activation(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+) -> anyhow::Result<Option<ActivationRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM extension_activations WHERE extension_id = ? AND node_id = ?",
+    )
+    .bind(extension_id)
+    .bind(node_id.to_string())
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn list_activations_for_node(
+    pool: &SqlitePool,
+    node_id: Uuid,
+) -> anyhow::Result<Vec<ActivationRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM extension_activations WHERE node_id = ? ORDER BY extension_id",
+    )
+    .bind(node_id.to_string())
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Upserts the activation and bumps its revision. The revision is what tells
+/// the agent to run activate/deactivate hooks; config edits do not touch it.
+pub async fn set_activation(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+    enabled: bool,
+    actor: &str,
+) -> anyhow::Result<ActivationRow> {
+    sqlx::query(
+        "INSERT INTO extension_activations(extension_id, node_id, enabled, revision, updated_at, updated_by)
+         VALUES(?,?,?,1,?,?)
+         ON CONFLICT(extension_id, node_id) DO UPDATE SET
+           enabled = excluded.enabled,
+           revision = extension_activations.revision + 1,
+           updated_at = excluded.updated_at,
+           updated_by = excluded.updated_by",
+    )
+    .bind(extension_id)
+    .bind(node_id.to_string())
+    .bind(i64::from(enabled))
+    .bind(now_ts())
+    .bind(actor)
+    .execute(pool)
+    .await?;
+    get_activation(pool, extension_id, node_id)
+        .await?
+        .ok_or_else(|| anyhow!("ativação de extensão desapareceu após gravação"))
+}
+
+// ---------------------------------------------------------------------------
+// Adapter resources (shares materialized from manifests)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct AdapterResourceRow {
+    pub extension_id: String,
+    pub node_id: String,
+    pub resource: String,
+    pub resource_id: String,
+    pub updated_at: i64,
+}
+
+impl_from_row!(AdapterResourceRow {
+    extension_id,
+    node_id,
+    resource,
+    resource_id,
+    updated_at,
+});
+
+pub async fn get_adapter_resource(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+    resource: &str,
+) -> anyhow::Result<Option<AdapterResourceRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM extension_adapter_resources
+         WHERE extension_id = ? AND node_id = ? AND resource = ?",
+    )
+    .bind(extension_id)
+    .bind(node_id.to_string())
+    .bind(resource)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn list_all_adapter_resources(
+    pool: &SqlitePool,
+) -> anyhow::Result<Vec<AdapterResourceRow>> {
+    Ok(sqlx::query_as("SELECT * FROM extension_adapter_resources ORDER BY extension_id, node_id, resource")
+        .fetch_all(pool)
+        .await?)
+}
+
+pub async fn list_adapter_resources(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+) -> anyhow::Result<Vec<AdapterResourceRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM extension_adapter_resources
+         WHERE extension_id = ? AND node_id = ? ORDER BY resource",
+    )
+    .bind(extension_id)
+    .bind(node_id.to_string())
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn set_adapter_resource(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+    resource: &str,
+    resource_id: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO extension_adapter_resources(extension_id, node_id, resource, resource_id, updated_at)
+         VALUES(?,?,?,?,?)
+         ON CONFLICT(extension_id, node_id, resource) DO UPDATE SET
+           resource_id = excluded.resource_id,
+           updated_at = excluded.updated_at",
+    )
+    .bind(extension_id)
+    .bind(node_id.to_string())
+    .bind(resource)
+    .bind(resource_id)
+    .bind(now_ts())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_adapter_resource(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+    resource: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "DELETE FROM extension_adapter_resources
+         WHERE extension_id = ? AND node_id = ? AND resource = ?",
+    )
+    .bind(extension_id)
+    .bind(node_id.to_string())
+    .bind(resource)
+    .execute(pool)
+    .await?;
+    Ok(())
 }

@@ -10,8 +10,8 @@ use wm_proto::{PathKind, ShareKind};
 
 use crate::actions;
 use crate::app::{
-    App, FieldKind, Level, MouseAction, TABS, TAB_AGENT, TAB_CONSOLE, TAB_HELP, TAB_PEERS,
-    TAB_SERVICES, TAB_SHARES, TAB_STATUS, TAB_TOPOLOGY,
+    App, FieldKind, Level, MouseAction, TABS, TAB_AGENT, TAB_CONSOLE, TAB_EXTENSIONS, TAB_HELP,
+    TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS, TAB_TOPOLOGY,
 };
 
 const BORDER: Color = Color::DarkGray;
@@ -42,6 +42,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         TAB_SHARES => draw_shares(frame, chunks[2], app),
         TAB_TOPOLOGY => draw_topology(frame, chunks[2], app),
         TAB_AGENT => draw_agent(frame, chunks[2], app),
+        TAB_EXTENSIONS => draw_extensions(frame, chunks[2], app),
         TAB_SERVICES => draw_services(frame, chunks[2], app),
         TAB_CONSOLE => draw_console(frame, chunks[2], app),
         TAB_HELP => draw_help(frame, chunks[2], app),
@@ -277,6 +278,16 @@ fn action_bar_specs(app: &App) -> Vec<ButtonSpec> {
             specs.push(button("Ajustes", MouseAction::AgentSettings));
             specs.push(button("Log", MouseAction::AgentLog));
             specs.push(button("Serviço", MouseAction::InstallService));
+        }
+        TAB_EXTENSIONS => {
+            if let Some(view) = app.selected_extension() {
+                specs.push(button(
+                    if view.active { "Desativar" } else { "Ativar" },
+                    MouseAction::ToggleExtension,
+                ));
+            }
+            specs.push(button("Painel", MouseAction::OpenExtensionsPanel));
+            specs.push(button("GUI local", MouseAction::OpenGui));
         }
         TAB_SERVICES => {
             let gui_active = app
@@ -1076,6 +1087,131 @@ fn draw_agent(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(4)])
+        .split(area);
+
+    let live = if app.live {
+        Line::from(vec![
+            Span::styled("● ", Style::default().fg(Color::Green)),
+            Span::raw("catálogo do control via agente · "),
+            Span::styled("Enter/t ativa ou desativa no nó", Style::default().fg(Color::Cyan)),
+            Span::raw(" · p abre o painel · g GUI local"),
+        ])
+    } else {
+        Line::from(Span::styled(
+            "sem agente: ative o agente para ler o catálogo e alternar extensões",
+            Style::default().fg(Color::Yellow),
+        ))
+    };
+    frame.render_widget(
+        Paragraph::new(live).block(block(" Extensões deste nó ")),
+        chunks[0],
+    );
+
+    let header = Row::new(vec!["Extensão", "Driver", "Ativa", "Estado", "Mensagem / URL"])
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    let rows: Vec<Row> = app
+        .extension_catalog
+        .iter()
+        .map(|view| {
+            let active = if view.active {
+                Span::styled("on", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("off", Style::default().fg(Color::DarkGray))
+            };
+            let (state, color) = match view.status.as_ref().map(|status| status.state) {
+                Some(wm_proto::ExtensionState::Running) => ("running", Color::Green),
+                Some(wm_proto::ExtensionState::Starting) => ("starting", Color::Cyan),
+                Some(wm_proto::ExtensionState::Error) => ("error", Color::Red),
+                Some(wm_proto::ExtensionState::Stopped) => ("stopped", Color::DarkGray),
+                None if view.active && !view.configured => ("sem config", Color::Yellow),
+                None if view.active => ("aguardando", Color::DarkGray),
+                None => ("—", Color::DarkGray),
+            };
+            let mut message = view
+                .status
+                .as_ref()
+                .and_then(|status| status.message.clone())
+                .unwrap_or_default();
+            if let Some(url) = view
+                .status
+                .as_ref()
+                .and_then(|status| status.public_urls.first())
+            {
+                if !message.is_empty() {
+                    message.push_str(" · ");
+                }
+                message.push_str(url);
+            }
+            if !view.active && !view.configured && view.default_config {
+                if !message.is_empty() {
+                    message.push_str(" · ");
+                }
+                message.push_str("Enter ativa com config padrão");
+            }
+            let label = if view.builtin {
+                format!("{} ✦", view.name)
+            } else {
+                view.name.clone()
+            };
+            Row::new(vec![
+                Cell::from(label),
+                Cell::from(view.driver.clone()),
+                Cell::from(active),
+                Cell::from(Span::styled(state, Style::default().fg(color))),
+                Cell::from(truncate(&message, 64)),
+            ])
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(22),
+            Constraint::Length(12),
+            Constraint::Length(6),
+            Constraint::Length(11),
+            Constraint::Min(22),
+        ],
+    )
+    .header(header)
+    .row_highlight_style(Style::default().bg(HIGHLIGHT).add_modifier(Modifier::BOLD))
+    .highlight_symbol("▸ ")
+    .block(block(format!(
+        " Catálogo de extensões ({}) ",
+        app.extension_catalog.len()
+    )));
+    frame.render_stateful_widget(table, chunks[1], &mut app.extensions_table);
+    let offset = app.extensions_table.offset();
+    let total = app.extension_catalog.len();
+    register_table_rows(
+        app,
+        chunks[1],
+        offset,
+        total,
+        MouseAction::SelectExtension,
+    );
+
+    if app.extension_catalog.is_empty() {
+        empty_message(
+            frame,
+            chunks[1],
+            if app.live {
+                "nenhuma extensão no catálogo; verifique <data_dir>/extensions"
+            } else {
+                "agente parado"
+            },
+        );
+    }
+}
+
 fn draw_services(frame: &mut Frame, area: Rect, app: &mut App) {
     let extensions_height = if area.height >= 22 { 5 } else { 3 };
     let chunks = Layout::default()
@@ -1294,7 +1430,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("  1…8 / Tab / ← →   troca de aba"),
+        Line::from("  1…9 / Tab / ← →   troca de aba"),
         Line::from("  ↑ ↓ / j k          navega (Console: rola o histórico)"),
         Line::from("  PgUp / PgDn · Home/End   rolagem do Console e da Ajuda"),
         Line::from("  :                  comando wm (ex.: status, share 3000 --name demo)"),
@@ -1341,6 +1477,16 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::from("  i instalar serviço · u remover · t status · d doctor"),
         Line::from(""),
         Line::from(Span::styled(
+            "extensões",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("  Enter/t ativa ou desativa a extensão selecionada neste nó"),
+        Line::from("  cloudflared: ative e configure rotas no painel (/extensions)"),
+        Line::from("  seance: ativar roda install/activate, expõe 8421 e publica o share"),
+        Line::from("  p abre o painel de extensões · g abre a GUI local do nó"),
+        Line::from(""),
+        Line::from(Span::styled(
             "peers e shares",
             Style::default().add_modifier(Modifier::BOLD),
         )),
@@ -1351,11 +1497,12 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::from("  n (Peers/Início): renomear este nó"),
         Line::from(""),
         Line::from(Span::styled(
-            "console (aba 7 ou :)",
+            "console (aba 8 ou :)",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("  status · peers · shares · share 3000 --name demo · open demo"),
+        Line::from("  extensions · extensions enable seance · extensions disable cloudflared"),
         Line::from("  resolve nome · ping peer · probe peer 80 · shares"),
         Line::from("  up · down · join <url> --token … · host · serve · gui · doctor"),
         Line::from("  service status · service install --mode agent · version"),
@@ -1489,10 +1636,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         TAB_SHARES => " n publicar · Enter abrir · c copiar · r renomear · e on/off · d remover",
         TAB_TOPOLOGY => " Tab abas · ? ajuda · q sair (agente continua)",
         TAB_AGENT => " s iniciar · X parar · R reiniciar · e ajustes · l log · i serviço",
+        TAB_EXTENSIONS => " Enter/t ativar · p painel · g GUI · j/k navegar · ? ajuda",
         TAB_SERVICES => " Enter log · g/G GUI · p painel · x para job · i/u serviço · t status",
         TAB_CONSOLE => " : comando · j/k rolar · PgUp/PgDn · Home/End · c limpar",
         TAB_HELP => " j/k rolar · :comando · q sair (agente continua)",
-        _ => " :comando · 1…8 abas · q sair (agente continua)",
+        _ => " :comando · 1…9 abas · q sair (agente continua)",
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -2150,13 +2298,48 @@ mod tests {
     }
 
     #[test]
+    fn extensions_tab_lists_catalog_and_activation_actions() {
+        let root = temp_root("extensions");
+        let mut app = App::load(root.clone());
+        app.live = true;
+        app.tab = TAB_EXTENSIONS;
+        app.extension_catalog = vec![wm_proto::NodeExtensionView {
+            id: "seance".into(),
+            name: "Seance".into(),
+            version: "0.1.0".into(),
+            description: "Baguette no nó".into(),
+            driver: "exec".into(),
+            ui: "generic".into(),
+            builtin: false,
+            active: false,
+            configured: false,
+            activation_revision: 0,
+            default_config: true,
+            status: None,
+        }];
+        app.extensions_table.select(Some(0));
+        let text = render(&mut app, 110, 30);
+        assert!(text.contains("Extensões deste nó"));
+        assert!(text.contains("Seance"));
+        assert!(text.contains("Enter ativa com config padrão"));
+        assert!(text.contains("Ativar"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn services_console_help_and_shares_render() {
         let root = temp_root("misc");
         let mut app = App::load(root.clone());
-        for tab in [TAB_SERVICES, TAB_CONSOLE, TAB_HELP, TAB_SHARES] {
+        for tab in [TAB_EXTENSIONS, TAB_SERVICES, TAB_CONSOLE, TAB_HELP, TAB_SHARES] {
             app.tab = tab;
             let text = render(&mut app, 100, 30);
-            assert!(text.contains("Console / eventos") || text.contains("Ajuda") || text.contains("Serviços") || text.contains("Shares"));
+            assert!(
+                text.contains("Console / eventos")
+                    || text.contains("Ajuda")
+                    || text.contains("Serviços")
+                    || text.contains("Shares")
+                    || text.contains("Extensões deste nó")
+            );
         }
         app.tab = TAB_CONSOLE;
         app.push_console(Level::Good, "linha de teste");

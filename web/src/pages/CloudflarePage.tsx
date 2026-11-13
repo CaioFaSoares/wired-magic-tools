@@ -488,6 +488,21 @@ export function CloudflarePage() {
       push({ tone: "error", title: "Falha ao reiniciar", description: errorMessage(error) }),
   });
 
+  const activationMutation = useMutation({
+    mutationFn: ({ node, active }: { node: CloudflaredNodeView; active: boolean }) =>
+      api.setExtensionActivation("cloudflared", node.node_id, active),
+    onSuccess: (_result, variables) => {
+      push({
+        tone: "ok",
+        title: variables.active ? "Extensão ativada" : "Extensão desativada",
+        description: variables.node.node_name,
+      });
+      invalidate();
+    },
+    onError: (error) =>
+      push({ tone: "error", title: "Falha ao alterar ativação", description: errorMessage(error) }),
+  });
+
   const header = (
     <PageHeader
       eyebrow="Extensão"
@@ -602,6 +617,7 @@ export function CloudflarePage() {
               <thead>
                 <tr>
                   <th scope="col">Nó</th>
+                  <th scope="col">Ativa</th>
                   <th scope="col">Binário</th>
                   <th scope="col">Túnel</th>
                   <th scope="col">Credenciais</th>
@@ -618,6 +634,9 @@ export function CloudflarePage() {
                       <p className="font-mono text-[10px] text-faint">
                         {node.overlay_ip} · {node.hostname}
                       </p>
+                    </td>
+                    <td>
+                      {node.active ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}
                     </td>
                     <td>
                       <InlineCode>{node.binary}</InlineCode>
@@ -655,6 +674,17 @@ export function CloudflarePage() {
                     </td>
                     <td className="text-right">
                       <div className="flex justify-end gap-1.5">
+                        <Button
+                          size="sm"
+                          variant={node.active ? "ghost" : "primary"}
+                          onClick={() => activationMutation.mutate({ node, active: !node.active })}
+                          loading={
+                            activationMutation.isPending &&
+                            activationMutation.variables?.node.node_id === node.node_id
+                          }
+                        >
+                          {node.active ? "Desativar" : "Ativar"}
+                        </Button>
                         <Button
                           size="sm"
                           variant="secondary"

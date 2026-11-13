@@ -11,6 +11,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("status", "estado do agente"),
     ("peers", "peers do mapa"),
     ("shares", "serviços publicados"),
+    ("extensions", "listar/ativar extensões neste nó"),
     ("share", "publicar porta (share <porta> --name <nome>)"),
     ("unshare", "remover share"),
     ("share-rename", "renomear share"),

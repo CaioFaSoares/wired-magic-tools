@@ -32,12 +32,12 @@ use ratatui::crossterm::terminal::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use wm_proto::{AgentStatus, ExtensionStatus, PeerStatus, ShareInfo};
+use wm_proto::{AgentStatus, ExtensionStatus, NodeExtensionView, PeerStatus, ShareInfo};
 
 use crate::agent::{AgentEvent, JobEvent};
 use crate::app::{
-    App, FieldKind, Level, Menu, MenuItem, MouseAction, TABS, TAB_AGENT, TAB_CONSOLE, TAB_HELP,
-    TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS,
+    App, FieldKind, Level, Menu, MenuItem, MouseAction, TABS, TAB_AGENT, TAB_CONSOLE,
+    TAB_EXTENSIONS, TAB_HELP, TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS,
 };
 use crate::persist::EnrolledNode;
 
@@ -56,6 +56,7 @@ pub struct Snapshot {
     pub peers: Vec<PeerStatus>,
     pub shares: Vec<ShareInfo>,
     pub extensions: Vec<ExtensionStatus>,
+    pub extension_catalog: Vec<NodeExtensionView>,
     pub error: Option<String>,
     pub log: Vec<String>,
     pub pid: Option<u32>,
@@ -261,14 +262,15 @@ fn start_fetcher(root: PathBuf, socket: PathBuf, log: PathBuf, tx: Sender<Msg>) 
                     },
                     Err(err) => (None, Some(err)),
                 };
-            let (peers, shares, extensions) = if status.is_some() {
+            let (peers, shares, extensions, extension_catalog) = if status.is_some() {
                 (
                     fetch::<PeerStatus>(&socket, "peers"),
                     fetch::<ShareInfo>(&socket, "shares"),
                     fetch::<ExtensionStatus>(&socket, "extensions"),
+                    fetch::<NodeExtensionView>(&socket, "extension_catalog"),
                 )
             } else {
-                (Vec::new(), Vec::new(), Vec::new())
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new())
             };
             let pid = agent::read_pid(&root);
             let log_lines = agent::log_tail(&log);
@@ -278,6 +280,7 @@ fn start_fetcher(root: PathBuf, socket: PathBuf, log: PathBuf, tx: Sender<Msg>) 
                     peers,
                     shares,
                     extensions,
+                    extension_catalog,
                     error,
                     log: log_lines,
                     pid,
@@ -624,6 +627,7 @@ fn handle_mouse(app: &mut App, event: MouseEvent, tx: &Sender<Msg>) {
                         MouseAction::SelectPeer(_)
                             | MouseAction::SelectShare(_)
                             | MouseAction::SelectJob(_)
+                            | MouseAction::SelectExtension(_)
                     ) {
                         execute_mouse(app, action, tx);
                     }
@@ -684,11 +688,14 @@ fn mouse_click(app: &mut App, column: u16, row: u16, tx: &Sender<Msg>) {
     };
     let row_action = matches!(
         action,
-        MouseAction::SelectPeer(_) | MouseAction::SelectShare(_) | MouseAction::SelectJob(_)
+        MouseAction::SelectPeer(_)
+            | MouseAction::SelectShare(_)
+            | MouseAction::SelectJob(_)
+            | MouseAction::SelectExtension(_)
     );
     execute_mouse(app, action, tx);
     if double && row_action {
-        activate_selection(app);
+        activate_selection(app, tx);
     }
 }
 
@@ -722,11 +729,16 @@ fn mouse_scroll(app: &mut App, up: bool, column: u16, row: u16) {
     }
 }
 
-fn activate_selection(app: &mut App) {
+fn activate_selection(app: &mut App, tx: &Sender<Msg>) {
     match app.tab {
         TAB_PEERS => actions::open_probe_form(app),
         TAB_SHARES => actions::open_share(app),
         TAB_SERVICES => actions::view_job_log(app),
+        TAB_EXTENSIONS => {
+            if let Some(view) = app.selected_extension().cloned() {
+                actions::toggle_extension(app, &view, tx);
+            }
+        }
         _ => {}
     }
 }
@@ -773,7 +785,16 @@ fn execute_mouse(app: &mut App, action: MouseAction, tx: &Sender<Msg>) {
         A::SelectJob(index) if index < app.jobs.len() => {
             app.jobs_table.select(Some(index));
         }
-        A::SelectPeer(_) | A::SelectShare(_) | A::SelectJob(_) => {}
+        A::SelectExtension(index) if index < app.extension_catalog.len() => {
+            app.extensions_table.select(Some(index));
+        }
+        A::ToggleExtension => {
+            if let Some(view) = app.selected_extension().cloned() {
+                actions::toggle_extension(app, &view, tx);
+            }
+        }
+        A::OpenExtensionsPanel => actions::open_extensions_panel(app),
+        A::SelectPeer(_) | A::SelectShare(_) | A::SelectJob(_) | A::SelectExtension(_) => {}
         A::OpenMenu => open_menu(app),
         A::MenuSelect(_) => {}
         A::MenuClose => app.menu = None,
@@ -893,7 +914,7 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             open_menu(app);
             return;
         }
-        KeyCode::Char(digit @ '1'..='8') => {
+        KeyCode::Char(digit @ '1'..='9') => {
             app.tab = (digit as usize - '1' as usize).min(TABS.len() - 1);
             return;
         }
@@ -949,6 +970,11 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             TAB_SHARES => actions::open_share(app),
             TAB_PEERS => actions::open_probe_form(app),
             TAB_SERVICES => actions::view_job_log(app),
+            TAB_EXTENSIONS => {
+                if let Some(view) = app.selected_extension().cloned() {
+                    actions::toggle_extension(app, &view, tx);
+                }
+            }
             _ => {}
         },
         KeyCode::Char('c') if app.tab == TAB_CONSOLE => {
@@ -1000,6 +1026,17 @@ fn handle_tab_action(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             KeyCode::Char('e') => actions::toggle_share(app, tx),
             KeyCode::Char('d') => actions::request_delete_share(app, tx),
             KeyCode::Char('c') => actions::copy_selected_share(app),
+            _ => {}
+        },
+        TAB_EXTENSIONS => match key.code {
+            KeyCode::Char('t') | KeyCode::Char(' ') => {
+                if let Some(view) = app.selected_extension().cloned() {
+                    actions::toggle_extension(app, &view, tx);
+                }
+            }
+            KeyCode::Char('p') => actions::open_extensions_panel(app),
+            KeyCode::Char('g') => actions::open_gui(app, tx),
+            KeyCode::Char('d') => actions::run_doctor(app, tx),
             _ => {}
         },
         TAB_SERVICES => match key.code {
@@ -1065,6 +1102,9 @@ fn navigate(app: &mut App, down: bool) {
             select(&mut app.shares_table, app.shares.len(), down, 1);
             app.delete_armed = None;
         }
+        TAB_EXTENSIONS => {
+            select(&mut app.extensions_table, app.extension_catalog.len(), down, 1);
+        }
         TAB_SERVICES => select(&mut app.jobs_table, app.jobs.len(), down, 1),
         TAB_CONSOLE => app.scroll_console(if down { -1 } else { 1 }),
         TAB_HELP => {
@@ -1084,6 +1124,9 @@ fn navigate_by(app: &mut App, delta: isize) {
         TAB_SHARES => {
             select_step(&mut app.shares_table, app.shares.len(), delta);
             app.delete_armed = None;
+        }
+        TAB_EXTENSIONS => {
+            select_step(&mut app.extensions_table, app.extension_catalog.len(), delta);
         }
         TAB_SERVICES => select_step(&mut app.jobs_table, app.jobs.len(), delta),
         TAB_CONSOLE => app.scroll_console(-delta),
@@ -1420,7 +1463,9 @@ mod tests {
         let (tx, _rx) = sender();
         press(&mut app, KeyCode::Char('5'), &tx);
         assert_eq!(app.tab, TAB_AGENT);
-        press(&mut app, KeyCode::Char('7'), &tx);
+        press(&mut app, KeyCode::Char('6'), &tx);
+        assert_eq!(app.tab, TAB_EXTENSIONS);
+        press(&mut app, KeyCode::Char('8'), &tx);
         assert_eq!(app.tab, TAB_CONSOLE);
         press(&mut app, KeyCode::Char('?'), &tx);
         assert_eq!(app.tab, TAB_HELP);

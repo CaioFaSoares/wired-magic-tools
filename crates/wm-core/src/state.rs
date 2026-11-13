@@ -14,7 +14,7 @@ use wm_proto::{EnrollRequest, EnrollResponse, NatType};
 
 use crate::control::ControlClient;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExposeSpec {
     /// Porta no endereço overlay (onde os peers conectam).
     pub overlay_port: u16,

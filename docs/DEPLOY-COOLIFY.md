@@ -30,6 +30,12 @@ VPS Linux
         Macs / Linux com `wm join`
 ```
 
+A topologia acima mostra as portas padrão. Configure `WM_HTTP_PORT` (8080),
+`WM_STUN_PORT` (3478) e `WM_UDP_PORT` (41641) para usar outras portas. HTTP fica
+somente na rede interna; o proxy do Coolify deve usar a porta `WM_HTTP_PORT` configurada.
+As duas portas UDP são iguais dentro e fora do container: não altere só a porta externa,
+pois isso pode fazer o serviço anunciar um endpoint incorreto.
+
 O container precisa de `/dev/net/tun` e da capability `NET_ADMIN` para criar a interface TUN
 e instalar rotas **dentro do próprio container**. Ele **não** roda `privileged` e não altera
 rotas do host.
@@ -56,8 +62,8 @@ rotas do host.
   sudo modprobe tun
   ```
 
-- Nenhum outro processo usando `3478/udp` ou `41641/udp`. O STUN usa 3478 fixo nesta versão;
-  o 41641 pode ser trocado no compose (`--udp-port` e `ports`).
+- Nenhum outro processo usando as portas UDP escolhidas (`WM_STUN_PORT` e `WM_UDP_PORT`,
+  padrões `3478/udp` e `41641/udp`). Libere essas portas no firewall se alterar os padrões.
 - 2 vCPU e 2–4 GB de RAM são confortáveis para o build Rust + Web; em runtime o container usa
   bem menos. O build acontece no servidor do Coolify.
 
@@ -70,6 +76,9 @@ No Coolify, crie o recurso e cadastre em **Environment Variables**:
 | `WM_PUBLIC_URL` | sim | `https://mesh.exemplo.com` | URL pública **sem** `:8080` e sem barra no final; entra no painel, nos convites e nos tokens de relay |
 | `WM_ADMIN_PASSWORD` | sim | senha longa e única | só é aplicada no primeiro start; depois o hash fica no SQLite |
 | `WM_NODE_NAME` | não | `gateway` | nome do nó `.1` no painel; padrão `gateway` |
+| `WM_HTTP_PORT` | não | `8080` | porta HTTP interna; configure a mesma porta no proxy do Coolify |
+| `WM_STUN_PORT` | não | `3478` | porta STUN UDP, interna e externa iguais |
+| `WM_UDP_PORT` | não | `41641` | porta WireGuard UDP do gateway, interna e externa iguais |
 | `WM_LOG` | não | `info` | `trace`, `debug`, `info`, `warn` ou `error` |
 
 Gere a senha com algo como:
@@ -79,9 +88,15 @@ openssl rand -base64 32
 ```
 
 > **Não confunda as duas URLs.** O domínio do Coolify aponta para o serviço `wm` na porta
-> interna **8080** (`https://mesh.exemplo.com:8080` no campo Domains). Já `WM_PUBLIC_URL` é a
-> URL pública sem porta (`https://mesh.exemplo.com`). Se colocar `:8080` nela, os convites e o
-> relay passam a apontar para a porta errada.
+> interna **`WM_HTTP_PORT`** (padrão 8080; `https://mesh.exemplo.com:8080` no campo Domains).
+> Já `WM_PUBLIC_URL` é a URL pública sem a porta interna (`https://mesh.exemplo.com`).
+> Não copie a porta interna para essa URL: convites e relay apontariam para a porta errada.
+
+O compose passa `--listen 0.0.0.0:<WM_HTTP_PORT>`,
+`--stun-listen 0.0.0.0:<WM_STUN_PORT>` e `--udp-port <WM_UDP_PORT>` ao `wm host`.
+`--stun-listen` recebe um `SocketAddr` (IP:porta). Para anunciar servidores STUN diferentes,
+adicione `--stun-url stun:host:porta` ao `command`, repetindo a opção para cada servidor.
+O endereço anunciado deve ser alcançável pelos clientes, nunca `0.0.0.0`.
 
 ## 2. Criar o recurso no Coolify
 
@@ -93,13 +108,45 @@ openssl rand -base64 32
    - **Docker Compose Location:** `/docker-compose.yml`
 5. Salve e abra **Domains**:
    - **Service:** `wm`
-   - **Domain:** `https://mesh.exemplo.com:8080`
+   - **Domain:** `https://mesh.exemplo.com:8080` (substitua `8080` pelo valor de `WM_HTTP_PORT`)
 6. Cadastre as variáveis da seção anterior.
 7. Clique em **Deploy**.
 
 O Coolify vai construir a imagem a partir do `Dockerfile` da raiz (Web + Rust) e gerar as
-labels do Traefik para o domínio. O primeiro build costuma levar alguns minutos. Um redeploy do
-mesmo commit reutiliza as camadas; mudanças de código recompilam o workspace Rust.
+labels do Traefik para o domínio. O primeiro build costuma levar alguns minutos.
+
+### Cache e builds locais
+
+É necessário **BuildKit** (Docker Engine/Compose atuais, também no builder usado pelo Coolify).
+O compose usa somente `build.context`, `dockerfile` e `target`; não requer Bake, cache remoto,
+modo privilegiado de build nem uma plataforma fixa. A imagem é construída na arquitetura do
+builder (ARM64 ou x86_64), sem configurar cross-compilation.
+
+```sh
+# As variáveis obrigatórias do compose continuam necessárias, mesmo para config/build.
+docker compose config --quiet
+docker compose build wm
+docker compose up -d --no-build
+```
+
+- Mesmo commit: reutiliza as camadas completas.
+- Mudança no frontend: mantém a instalação de dependências se os manifests não mudaram.
+  Downloads pnpm ficam num cache persistente, inclusive quando o lockfile muda.
+- Mudança em Rust: caches de registry/git evitam baixar novamente; o cache de `target`
+  reutiliza dependências compiladas, separado por arquitetura e versão de Rust.
+- `wm-control` é limpo no passo de compilação para garantir que `rust-embed` incorpore o
+  painel atualizado; suas dependências continuam em cache. O binário é copiado para fora do
+  mount antes de entrar na imagem final. Nenhum cache de build é incluído no runtime.
+- Os caches pertencem ao **builder**, não ao volume `wm-data`: trocar o builder/servidor,
+  garbage collection ou limpeza de cache no Coolify pode exigir downloads/build completos.
+  `--no-cache` refaz camadas, mas **não esvazia** os cache mounts. Para uma medição realmente
+  fria use um builder novo; não apague caches compartilhados de produção sem planejamento.
+
+Não configure `DOCKER_BUILDKIT=0`. Em versões antigas do Coolify/Docker confirme suporte a
+`RUN --mount=type=cache`; o deploy real no Coolify ainda precisa ser validado no seu servidor.
+O `.dockerignore` exclui builds locais, dependências, estado e arquivos `.env*` (exceto o
+exemplo), evitando contextos enormes e envio acidental de segredos. Variáveis de runtime
+continuam sendo fornecidas pelo Compose/Coolify, não copiadas para a imagem.
 
 O nó gateway se inscreve sozinho no primeiro start (`WM_NODE_NAME`, padrão `gateway`) e
 reivindica `10.66.0.1`; não é preciso criar token para ele. Os tokens são para as outras
@@ -111,16 +158,19 @@ usa `build.context: .`; não é necessário publicar imagem em registry.
 ## 3. Primeiro start e login
 
 Acompanhe **Deployment Logs** e depois **Runtime Logs**. O healthcheck consulta
-`/healthz`; quando ficar saudável:
+`http://127.0.0.1:<WM_HTTP_PORT>/healthz` dentro do container; quando ficar saudável:
 
 ```sh
 curl -fsS https://mesh.exemplo.com/healthz
 curl -fsS https://mesh.exemplo.com/api/v1/meta
 ```
 
-> O primeiro start inscreve o nó gateway usando `WM_PUBLIC_URL`, ou seja, passando pelo Traefik.
-> Se o DNS ou o certificado ainda não estiverem prontos, o container pode reiniciar uma ou duas
-> vezes até o proxy responder; isso é esperado. O volume é preservado.
+> O primeiro start inscreve o gateway diretamente no listener HTTP local; o agente do host
+> também usa esse caminho, sem depender do Traefik ou do healthcheck público. `WM_PUBLIC_URL`
+> continua sendo a URL anunciada para painel, convites e clientes externos. Se você ativar TLS
+> nativo no próprio `wm host`, ele mantém a URL pública para validar o certificado.
+> Em versões antigas, `API 503: no available server` no cadastro podia impedir o startup:
+> atualize e reconstrua a imagem; não é necessário apagar o volume.
 
 Abra `https://mesh.exemplo.com` e entre com:
 
@@ -262,7 +312,7 @@ cria o schema no start e não tem migrações versionadas.
 
 ### Trocar domínio ou URL pública
 
-1. Atualize o domínio no Coolify (serviço `wm`, porta 8080).
+1. Atualize o domínio no Coolify (serviço `wm`, porta `WM_HTTP_PORT`, padrão 8080).
 2. Atualize `WM_PUBLIC_URL` (sem porta) e faça o deploy.
 3. Crie convites novos; os antigos continuam no banco, mas apontam para a URL anterior.
 
@@ -305,12 +355,12 @@ compile no alvo; o `docker cp` só funciona quando as arquiteturas batem.
 | Deploy falha por `WM_PUBLIC_URL`/`WM_ADMIN_PASSWORD` vazio | variável não cadastrada no Coolify | preencha Environment Variables e faça deploy |
 | Container reinicia com erro de TUN | `/dev/net/tun` ausente ou sem permissão | `ls -l /dev/net/tun`, `modprobe tun`; confira `devices`/`cap_add` |
 | `operation not permitted` ao criar `wm0` | capability insuficiente no Docker | mantenha `NET_ADMIN`; em último caso, `privileged: true` (evite em produção) |
-| `502` no domínio | proxy apontando para a porta errada ou container unhealthy | domínio `...:8080`; veja healthcheck e logs |
+| `502` no domínio | proxy apontando para a porta errada ou container unhealthy | use `WM_HTTP_PORT` no domínio/proxy (padrão `...:8080`); veja healthcheck e logs |
 | Painel abre, mas convite não carrega | `WM_PUBLIC_URL` diferente do domínio ou TLS ainda não emitido | corrija a URL, aguarde o certificado; teste `/healthz` |
 | Nós não aparecem online | 443 de saída bloqueada no cliente, token inválido ou ACL | `wm doctor`; `curl https://mesh.exemplo.com/healthz` no cliente |
-| Sem caminho direto, só relay | UDP 3478/41641 bloqueado, NAT/CGNAT ou firewall | libere UDP no host e na rede; relay é o fallback esperado |
-| `address already in use` em 3478 | outro STUN/serviço no host | libere a porta; o STUN usa 3478 fixo nesta versão |
-| `address already in use` em 41641 | outro WireGuard/serviço | troque `--udp-port` e o mapeamento `ports` no compose |
+| Sem caminho direto, só relay | UDP configurado bloqueado, NAT/CGNAT ou firewall | libere `WM_STUN_PORT`/`WM_UDP_PORT` no host e na rede; relay é o fallback esperado |
+| `address already in use` no STUN (padrão 3478) | outro STUN/serviço no host | altere `WM_STUN_PORT` e libere a nova porta UDP |
+| `address already in use` no WireGuard (padrão 41641) | outro WireGuard/serviço | altere `WM_UDP_PORT` e libere a nova porta UDP |
 | Convite de um comando falha no Mac | host não tem o binário macOS em `/data/control/dist` | publique o binário ou instale manualmente |
 
 Coleta útil para abrir um issue:
@@ -334,6 +384,10 @@ Remova também as regras de firewall/portas publicadas que não forem mais usada
 contém chaves e o banco; apague conscientemente.
 
 ## 10. Status de validação
+
+As validações de runtime abaixo são anteriores à otimização dos caches de build. Antes de
+promover, valide o build completo, a atualização do painel embutido e a reutilização dos caches
+no builder do deploy.
 
 O caminho foi exercitado localmente em Docker Desktop (Linux `arm64`) com o compose deste
 repositório: build da imagem, healthcheck, login no painel, criação de convite, inscrição de um

@@ -34,7 +34,7 @@ pub struct ControlConfig {
     pub relay_url: Option<String>,
     pub stun_enabled: bool,
     pub stun_listen: SocketAddr,
-    /// STUN URLs advertised to agents. Defaults to `<public host>:3478`.
+    /// STUN URLs advertised to agents. Defaults to `<public host>:<stun_listen port>`.
     pub stun_urls: Vec<String>,
     /// Initial admin password. When unset a random one is printed once.
     pub admin_password: Option<String>,
@@ -71,7 +71,7 @@ impl ControlConfig {
         let mut cfg: ControlConfig =
             toml::from_str(&text).with_context(|| format!("parseando {}", path.display()))?;
         cfg.apply_env();
-        cfg.validate()?;
+        // Validation (including derived public endpoints) happens after CLI overrides.
         Ok(cfg)
     }
 
@@ -182,6 +182,31 @@ impl ControlConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_defaults_are_derived_after_listener_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("control.toml");
+        std::fs::write(&path, "public_url = 'https://mesh.example:8443'\n").unwrap();
+        let mut cfg = ControlConfig::load(&path).unwrap();
+        assert!(cfg.stun_urls.is_empty());
+        cfg.public_url = "https://other.example:9443".into();
+        cfg.stun_listen = "0.0.0.0:5349".parse().unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.stun_urls, ["stun:other.example:5349"]);
+        assert_eq!(cfg.relay_public_url(), "https://other.example:9443/relay");
+    }
+
+    #[test]
+    fn explicit_stun_advertisement_survives_listener_change() {
+        let mut cfg = ControlConfig {
+            stun_listen: "0.0.0.0:5349".parse().unwrap(),
+            stun_urls: vec!["stun:mesh.example:443".into()],
+            ..Default::default()
+        };
+        cfg.validate().unwrap();
+        assert_eq!(cfg.stun_urls, ["stun:mesh.example:443"]);
+    }
 
     #[test]
     fn defaults_are_valid() {

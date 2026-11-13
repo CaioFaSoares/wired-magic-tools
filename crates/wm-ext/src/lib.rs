@@ -23,6 +23,7 @@ pub use cloudflared::{
 };
 pub use exec::{ExecConfig, RestartPolicy, validate_exec_config};
 pub use manifest::{
-    CLOUDFLARED_DRIVER, CLOUDFLARED_ID, EXEC_DRIVER, ExtensionManifest, LoadedManifests,
-    NodeDriver, builtin_cloudflared_manifest, load_dir, seed_builtin_manifests,
+    AdapterExpose, AdapterShare, AdapterSpec, CLOUDFLARED_DRIVER, CLOUDFLARED_ID, EXEC_DRIVER,
+    ExtensionManifest, LoadedManifests, NodeDriver, builtin_cloudflared_manifest,
+    builtin_seance_manifest, load_dir, seed_builtin_manifests,
 };

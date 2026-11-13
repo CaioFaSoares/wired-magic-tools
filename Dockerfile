@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # wired-magic — imagem única do host (control plane + relay + STUN + nó gateway).
 #
 # O painel React é compilado no estágio `web` e embutido no binário Rust pelo
@@ -16,7 +18,8 @@ RUN corepack enable && corepack prepare pnpm@10.34.9 --activate
 
 # Camada de dependências separada para aproveitar o cache do BuildKit.
 COPY web/package.json web/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=wm-pnpm-v10,target=/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile --store-dir=/pnpm/store
 
 COPY web/ ./
 RUN pnpm build
@@ -26,13 +29,25 @@ FROM rust:1.98-bookworm AS build
 
 WORKDIR /src
 
+# Separa artefatos por arquitetura; não força plataforma (Coolify ARM64/x86_64).
+ARG TARGETARCH
+
 # O rust-embed lê ../../web/dist a partir de crates/wm-control/src/api/spa.rs,
 # ou seja, /src/web/dist. O dist é gerado no estágio anterior.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY --from=web /web/dist ./web/dist
 
-RUN cargo build --release --locked -p wired-magic
+# Downloads e compilação sobrevivem à invalidação da camada por mudanças de código.
+# O cache target é um mount: copie o executável para fora dele no mesmo RUN.
+# rust-embed não acompanha necessariamente mudanças em web/dist via Cargo: limpe
+# apenas wm-control para nunca embutir o painel antigo, preservando dependências.
+RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=wm-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=wm-target-rust-1.98-${TARGETARCH},target=/src/target,sharing=locked \
+    cargo clean --release -p wm-control \
+ && cargo build --release --locked -p wired-magic \
+ && install -Dm755 target/release/wm /out/wm
 
 
 FROM debian:bookworm-slim AS runtime
@@ -44,7 +59,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl iproute2 \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /src/target/release/wm /usr/local/bin/wm
+COPY --from=build /out/wm /usr/local/bin/wm
 
 # O host grava control.db, chaves, agent-state.json e o socket local aqui.
 RUN mkdir -p /data && chmod 700 /data

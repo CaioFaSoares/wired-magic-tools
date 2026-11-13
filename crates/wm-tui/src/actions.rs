@@ -929,6 +929,58 @@ pub fn open_gui(app: &mut App, tx: &Sender<Msg>) {
 }
 
 /// Opens the control-plane admin panel in the default browser.
+/// Toggles one extension for this node through the local agent API. The
+/// control plane bumps the per-node activation revision and the agent runs
+/// install/activate/deactivate hooks as needed.
+pub fn toggle_extension(
+    app: &mut App,
+    view: &wm_proto::NodeExtensionView,
+    tx: &Sender<Msg>,
+) {
+    if !app.live {
+        app.notify(Level::Warn, "agente parado; ative a extensão com o agente no ar");
+        return;
+    }
+    let socket = app.socket.clone();
+    let id = view.id.clone();
+    let name = view.name.clone();
+    let active = !view.active;
+    let tx = tx.clone();
+    thread::spawn(move || {
+        let result = local_call(
+            &socket,
+            "extension_activation",
+            json!({ "id": id, "active": active }),
+        );
+        let (level, message) = match result {
+            Ok(_) if active => (Level::Good, format!("{name} ativada neste nó")),
+            Ok(_) => (Level::Good, format!("{name} desativada neste nó")),
+            Err(err) => (Level::Error, format!("falha ao alterar {name}: {err}")),
+        };
+        let _ = tx.send(Msg::Notify(level, message));
+    });
+}
+
+pub fn open_extensions_panel(app: &mut App) {
+    let url = app
+        .status
+        .as_ref()
+        .and_then(|status| status.control_url.clone())
+        .or_else(|| app.node.as_ref().map(|node| node.control_url.clone()))
+        .filter(|url| !url.trim().is_empty());
+    match url {
+        Some(url) => {
+            let url = format!("{}/extensions", url.trim_end_matches('/'));
+            open_external(&url);
+            app.notify(Level::Good, format!("abrindo extensões: {url}"));
+        }
+        None => app.notify(
+            Level::Warn,
+            "URL do control desconhecida; entre na malha primeiro",
+        ),
+    }
+}
+
 pub fn open_admin_panel(app: &mut App) {
     let url = app
         .status

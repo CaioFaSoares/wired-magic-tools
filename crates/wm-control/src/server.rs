@@ -43,6 +43,9 @@ pub async fn run(cfg: ControlConfig) -> anyhow::Result<()> {
     let presence_state = state.clone();
     tokio::spawn(async move { presence_loop(presence_state).await });
 
+    let adapter_state = state.clone();
+    tokio::spawn(async move { adapter_loop(adapter_state).await });
+
     let app = api::router(state.clone());
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
@@ -71,6 +74,22 @@ pub async fn run(cfg: ControlConfig) -> anyhow::Result<()> {
     }
     state.shutdown().await;
     Ok(())
+}
+
+/// Keeps declarative adapter effects (labels/shares) in sync even if an
+/// operator deletes a share by hand or edits a manifest without toggling
+/// activation. Exposes are projected into every map on demand.
+async fn adapter_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(Duration::from_secs(30));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        match crate::extensions::adapters::sync_all(&state).await {
+            Ok(true) => state.bump_version(),
+            Ok(false) => {}
+            Err(err) => tracing::warn!(%err, "adapter sync falhou"),
+        }
+    }
 }
 
 async fn presence_loop(state: Arc<AppState>) {

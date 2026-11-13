@@ -7,7 +7,8 @@ use serde::de::DeserializeOwned;
 
 use wm_proto::{
     ApiErrorBody, CreateShareRequest, EndpointsRequest, EnrollRequest, EnrollResponse,
-    NetworkMap, NodeView, ReportRequest, ShareInfo, UpdateShareRequest, VersionInfo,
+    NetworkMap, NodeExtensionView, NodeView, ReportRequest, ShareInfo, UpdateShareRequest,
+    VersionInfo,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -145,6 +146,35 @@ impl ControlClient {
             .await?;
         let _: serde_json::Value = Self::parse(resp).await?;
         Ok(())
+    }
+
+    pub async fn node_extensions(
+        &self,
+        token: &str,
+    ) -> Result<Vec<NodeExtensionView>, ControlError> {
+        let resp = self
+            .http
+            .get(self.url("/api/v1/node/extensions"))
+            .bearer_auth(token)
+            .send()
+            .await?;
+        Self::parse(resp).await
+    }
+
+    pub async fn set_node_extension(
+        &self,
+        token: &str,
+        id: &str,
+        active: bool,
+    ) -> Result<NodeExtensionView, ControlError> {
+        let resp = self
+            .http
+            .put(self.url(&format!("/api/v1/node/extensions/{id}")))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "active": active }))
+            .send()
+            .await?;
+        Self::parse(resp).await
     }
 
     pub async fn leave(&self, token: &str) -> Result<(), ControlError> {

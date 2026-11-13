@@ -124,6 +124,30 @@ Variáveis úteis:
 | `WM_ADMIN_PASSWORD` | senha inicial do admin (só no primeiro start) |
 | `WM_LOG` / `--log` | nível de log (`info`, `debug`, `trace`) |
 
+### Portas personalizadas no servidor
+
+As portas padrão não são obrigatórias. Exemplo sem proxy (TLS terminado pelo próprio servidor):
+
+```sh
+sudo wm host --listen 0.0.0.0:8443 \
+  --public-url https://mesh.exemplo.com:8443 \
+  --tls-cert /etc/wired-magic/cert.pem --tls-key /etc/wired-magic/key.pem \
+  --stun-listen 0.0.0.0:5349 --udp-port 51820
+```
+
+Libere **8443/tcp**, **5349/udp** e **51820/udp** no firewall. API, painel e relay
+compartilham a porta HTTP/TLS. Com proxy reverso, use a URL/porta pública do proxy em
+`--public-url`; a porta de `--listen` é interna. Os clientes recebem o endereço STUN
+com a porta escolhida automaticamente. Se houver remapeamento UDP para outra porta
+pública, anuncie-a com `--stun-url stun:mesh.exemplo.com:PORTA` (repetível).
+
+`wm serve` também aceita `--listen`, `--stun-listen` e `--stun-url`; não tem agente
+local, portanto não precisa de `--udp-port`. As variáveis `WM_LISTEN`,
+`WM_STUN_LISTEN`, `WM_STUN_URLS` (lista separada por vírgulas) e, em `wm host`,
+`WM_UDP_PORT` permitem configurar sem flags. No Docker Compose/Coolify, use
+`WM_HTTP_PORT`, `WM_STUN_PORT` e `WM_UDP_PORT`, conforme o [guia de deploy](docs/DEPLOY-COOLIFY.md).
+Alterações exigem reiniciar o servidor/recriar o container; não abrem o firewall automaticamente.
+
 > **Uma máquina, um agente.** As rotas do overlay são da máquina inteira. Para simular dois nós
 > no mesmo computador, use duas VMs/containers — não dois `wm join` no mesmo host.
 
@@ -363,7 +387,7 @@ serviço (o serviço usa o mesmo data dir e o mesmo lock de rotas).
 - `--approval-required` faz novos nós entrarem como `pending` até você aprovar no painel.
 - `--tag`/`--label` do host são administrativos; o nó local recebe a tag `gateway`.
 - `--expose 8421` publica um serviço local do próprio host no overlay (útil se o Seance roda na
-  mesma VPS).
+  mesma VPS); a extensão Seance faz isso automaticamente em cada nó ativado.
 
 **3. Coloque TLS na frente** (Caddy é o exemplo do repositório):
 
@@ -862,13 +886,20 @@ Crie o service token em **Integração** no painel; o escopo é `integration:nod
 
 Extensões adicionam funcionalidades no control e/ou nos nós. O estado desejado viaja no mapa
 versionado; o agente reconcilia sidecars e devolve o estado no report — sem porta, token ou
-conexão nova. A primeira extensão embutida é o **Cloudflare Tunnel** (`quick` com URL efêmera ou
-`named` com hostname próprio), com o `cloudflared` rodando no nó.
+conexão nova. Extensões node-side são **ativáveis por nó** na TUI (aba **Extensões**,
+`Enter/t`), no painel ou por `wm extensions enable <id>`; começam desativadas.
+
+A pasta [`extensions/`](extensions/) é a fonte de verdade dos bundlados:
+
+- **Cloudflare Tunnel** (`quick` com URL efêmera ou `named` com hostname próprio);
+- **Seance**, a receita de referência: `install.sh` instala o `seance-agent`, `activate.sh`
+  prepara, o adapter publica o share `baguette-<nó>`, expõe `8421` no overlay e aplica as
+  labels `seance`/`baguette_port`.
 
 Manifestos ficam em `<data-dir>/extensions/<id>/extension.toml`; extensões declarativas usam
-`node_driver = "exec"` e um JSON validado por nó. Guia completo:
-[extensions](docs/extensions.md). O alvo do cloudflared precisa ser loopback do próprio nó;
-credenciais nunca voltam pela API.
+`node_driver = "exec"` e um JSON validado por nó. Hooks de ciclo de vida e adapters estão em
+[hooks-adapters](docs/hooks-adapters.md); o guia geral é [extensions](docs/extensions.md). O
+alvo do cloudflared precisa ser loopback do próprio nó; credenciais nunca voltam pela API.
 
 ### Diagnóstico
 
@@ -897,13 +928,15 @@ No Linux, logs do serviço: `journalctl -u wired-magic-agent -n 200 --no-pager`.
 | `wm resolve <nome>` | resolve o nome no mapa |
 | `wm share <porta> --name <nome>` | publica um serviço (`--kind` web, game, tcp ou udp) |
 | `wm shares [--json]` | lista os shares da malha |
+| `wm extensions [--json]` | catálogo de extensões deste nó (TUI/GUI local) |
+| `wm extensions enable <id>` / `disable <id>` | ativa/desativa no nó atual |
 | `wm open <nome> [--print]` | abre um share web ou imprime o endereço |
 | `wm share-rename <nome> <novo>` | renomeia um share seu |
 | `wm share-enable <nome> [--off]` | liga/desliga um share seu |
 | `wm unshare <nome>` | remove um share seu |
 | `wm rename <nome>` | renomeia este nó |
 | `wm gui` | GUI local de membro (`--no-open`, `--listen`) |
-| `wm tui [--no-auto-start] [--no-mouse]` | console completo: inscrição, agente, shares, jobs, comandos e mouse |
+| `wm tui [--no-auto-start] [--no-mouse]` | console completo: inscrição, agente, shares, extensões, jobs, comandos e mouse |
 | `wm doctor` | diagnóstico (root, control, rota, socket) |
 | `wm version` | versão e protocolo |
 | `wm service install` (e `status`/`uninstall`) | systemd/launchd (`--mode agent` ou `host`) |
@@ -1003,7 +1036,8 @@ scripts/            smoke, verificação local e e2e
 | [API](docs/API.md) | endpoints, formatos e erros |
 | [INTEGRATION-SEANCE](docs/INTEGRATION-SEANCE.md) | leitura de nós pelo Seance |
 | [SHARES](docs/SHARES.md) | contrato de shares, GUI/TUI e exposição de loopback |
-| [extensions](docs/extensions.md) | extensões, cloudflared e drivers |
+| [extensions](docs/extensions.md) | extensões, ativação por nó, cloudflared e drivers |
+| [hooks-adapters](docs/hooks-adapters.md) | hooks de ciclo de vida, adapters e receita Seance |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) | diagnóstico e correções por sintoma |
 | [benchmarks](docs/benchmarks.md) | medições e ambiente de referência |
 | [deploy/README.md](deploy/README.md) | recipes de Caddy, systemd, launchd, Docker/Seance e SNAT |

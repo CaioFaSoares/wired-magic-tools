@@ -95,6 +95,21 @@ export function ExtensionDetailPage() {
       push({ tone: "error", title: "Falha ao salvar", description: errorMessage(error) }),
   });
 
+  const activationMutation = useMutation({
+    mutationFn: (node: ExtensionNodeView) =>
+      api.setExtensionActivation(extensionId, node.node_id, !node.active),
+    onSuccess: (_result, node) => {
+      invalidateExtensionQueries(queryClient);
+      push({
+        tone: "ok",
+        title: node.active ? "Extensão desativada" : "Extensão ativada",
+        description: `${node.node_name} · o agente aplica no próximo mapa`,
+      });
+    },
+    onError: (error) =>
+      push({ tone: "error", title: "Falha ao alterar ativação", description: errorMessage(error) }),
+  });
+
   const removeMutation = useMutation({
     mutationFn: (node: ExtensionNodeView) =>
       api.deleteExtensionNodeConfig(extensionId, node.node_id),
@@ -236,7 +251,7 @@ export function ExtensionDetailPage() {
               <thead>
                 <tr>
                   <th scope="col">Nó</th>
-                  <th scope="col">Habilitada</th>
+                  <th scope="col">Ativa</th>
                   <th scope="col">Revisão</th>
                   <th scope="col">Status</th>
                   <th scope="col">Config</th>
@@ -251,7 +266,12 @@ export function ExtensionDetailPage() {
                       <p className="font-medium text-ink">{node.node_name}</p>
                       <p className="font-mono text-[10px] text-faint">{node.overlay_ip}</p>
                     </td>
-                    <td>{node.enabled ? <Badge tone="ok">sim</Badge> : <Badge>não</Badge>}</td>
+                    <td>
+                      {node.active ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}
+                      <div className="mt-0.5 text-[10px] text-faint">
+                        {node.enabled ? "habilitada" : "desabilitada"}
+                      </div>
+                    </td>
                     <td className="font-mono text-xs text-muted">r{node.revision}</td>
                     <td>
                       {statusBadge(node.status)}
@@ -265,6 +285,17 @@ export function ExtensionDetailPage() {
                     <td className="text-[10px] text-faint">{formatDateTime(node.updated_at)}</td>
                     <td className="text-right">
                       <div className="flex justify-end gap-1.5">
+                        <Button
+                          size="sm"
+                          variant={node.active ? "ghost" : "primary"}
+                          onClick={() => activationMutation.mutate(node)}
+                          loading={
+                            activationMutation.isPending &&
+                            activationMutation.variables?.node_id === node.node_id
+                          }
+                        >
+                          {node.active ? "Desativar" : "Ativar"}
+                        </Button>
                         <Button size="sm" variant="secondary" onClick={() => openEditor(node)}>
                           <Save aria-hidden="true" className="size-3.5" />
                           Editar

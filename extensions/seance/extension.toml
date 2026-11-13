@@ -1,0 +1,50 @@
+# Adaptador de referência do Seance.
+#
+# O que ele faz quando ativado em um nó:
+#   - roda install.sh uma vez (instala o seance-agent);
+#   - roda activate.sh e inicia o sidecar `seance-agent`;
+#   - aplica labels no nó (seance=true, baguette_port=8421);
+#   - publica o share `baguette-<nó>` na malha;
+#   - expõe 127.0.0.1:8421 no overlay do nó (10.66.0.x:8421).
+#
+# Ajuste default_config.command se o agente estiver em outro caminho e
+# [hooks.install.env] se o download precisar de uma URL própria.
+id = "seance"
+name = "Seance"
+version = "0.1.0"
+description = "Monta o agente do Seance no nó, expõe o Baguette e publica o share na malha."
+author = "wired-magic"
+node_driver = "exec"
+ui = "generic"
+default_active = false
+
+[default_config]
+command = "/usr/local/bin/seance-agent"
+args = ["--baguette-port", "8421"]
+restart = "always"
+
+[hooks.install]
+command = "{extension_dir}/install.sh"
+timeout_secs = 300
+
+[hooks.install.env]
+# SEANCE_AGENT_URL = "https://exemplo/seance-agent-aarch64"
+
+[hooks.activate]
+command = "{extension_dir}/activate.sh"
+timeout_secs = 60
+
+[hooks.deactivate]
+command = "{extension_dir}/deactivate.sh"
+timeout_secs = 60
+
+[adapter]
+labels = { seance = "true", baguette_port = "8421" }
+exposes = [{ overlay_port = 8421, local_port = 8421 }]
+
+[[adapter.shares]]
+name = "baguette-{node}"
+port = 8421
+kind = "web"
+protocol = "tcp"
+description = "Baguette do Seance"

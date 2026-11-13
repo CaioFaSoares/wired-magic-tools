@@ -199,13 +199,19 @@ resolve `wm://nome` localmente e não precisa de uma chamada extra ao control.
 ## Extensões
 
 O estado desejado viaja em `NetworkMap.extensions`; o observado volta em
-`ReportRequest.extensions`. O contrato completo, drivers e segurança estão em
-[`extensions.md`](extensions.md).
+`ReportRequest.extensions`. `NetworkMap.exposes` leva portas de adapters
+(`MeshExpose{overlay_port,local_port}`). O contrato completo, ativação por nó,
+hooks e adapters estão em [`extensions.md`](extensions.md) e
+[`hooks-adapters.md`](hooks-adapters.md).
 
 - `GET /api/v1/admin/extensions` — manifestos carregados + contagens.
 - `GET /api/v1/admin/extensions/{id}` — manifesto + config/status por nó.
 - `POST /api/v1/admin/extensions/reload` (CSRF) — relê manifestos; incrementa a
   versão do mapa.
+- `PUT /api/v1/admin/extensions/{id}/nodes/{node_id}/activation` (CSRF) —
+  `{"active":true|false}` no nó.
+- `GET /api/v1/node/extensions` — catálogo para a TUI/GUI local (token do nó).
+- `PUT /api/v1/node/extensions/{id}` — ativa/desativa no nó atual; `{"active":bool}`.
 - `GET|PUT|DELETE /api/v1/admin/extensions/{id}/nodes/{node_id}/config` (CSRF
   nas mutações) — config genérica de extensões declarativas.
 - `GET /api/v1/admin/extensions/cloudflared/overview` — nós, rotas e status.

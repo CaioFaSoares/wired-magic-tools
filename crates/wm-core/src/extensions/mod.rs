@@ -16,6 +16,7 @@
 
 pub(crate) mod cloudflared;
 pub(crate) mod exec;
+pub(crate) mod hooks;
 mod process;
 
 use std::collections::HashMap;
@@ -24,11 +25,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use tokio::sync::watch;
+use tokio::sync::{Mutex as TokioMutex, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use wm_proto::{ExtensionDesired, ExtensionState, ExtensionStatus};
+
+use self::hooks::HookContext;
 
 /// Shared status cell for one extension instance.
 #[derive(Clone)]
@@ -116,17 +119,20 @@ impl Reporter {
 
 struct Handle {
     revision: u64,
+    activation_revision: u64,
     enabled: bool,
     fingerprint: String,
     reporter: Reporter,
     cancel: CancellationToken,
-    task: JoinHandle<()>,
+    _task: JoinHandle<()>,
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        // Do not abort: the task still has to run its deactivate hook after the
+        // driver notices the cancellation. The per-extension lock guarantees
+        // the next activate waits for this cleanup.
         self.cancel.cancel();
-        self.task.abort();
     }
 }
 
@@ -136,14 +142,16 @@ pub async fn run(
     mut desired_rx: watch::Receiver<Vec<ExtensionDesired>>,
     status_tx: watch::Sender<Vec<ExtensionStatus>>,
     work_dir: PathBuf,
+    ctx: HookContext,
 ) {
     let mut handles: HashMap<String, Handle> = HashMap::new();
+    let mut locks: HashMap<String, Arc<TokioMutex<()>>> = HashMap::new();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The map may already contain desired state when the agent starts (for
     // example after a reconnect). Process the current value before waiting.
     let initial = desired_rx.borrow_and_update().clone();
-    reconcile(&mut handles, initial, &work_dir);
+    reconcile(&mut handles, &mut locks, initial, &work_dir, &ctx);
     publish(&status_tx, &handles);
     loop {
         tokio::select! {
@@ -152,7 +160,7 @@ pub async fn run(
                     break;
                 }
                 let desired = desired_rx.borrow_and_update().clone();
-                reconcile(&mut handles, desired, &work_dir);
+                reconcile(&mut handles, &mut locks, desired, &work_dir, &ctx);
                 publish(&status_tx, &handles);
             }
             _ = tick.tick() => {
@@ -166,19 +174,31 @@ pub async fn run(
 
 fn reconcile(
     handles: &mut HashMap<String, Handle>,
+    locks: &mut HashMap<String, Arc<TokioMutex<()>>>,
     desired: Vec<ExtensionDesired>,
     work_dir: &std::path::Path,
+    ctx: &HookContext,
 ) {
     let keep: std::collections::HashSet<String> =
         desired.iter().map(|d| d.id.clone()).collect();
     handles.retain(|id, _| keep.contains(id));
 
     for desired in desired {
-        let fingerprint = serde_json::to_string(&desired.config).unwrap_or_default();
+        // A hook, driver or version change must also restart the instance so
+        // the new install/activate code actually runs. Config alone is not
+        // enough after a manifest reload.
+        let fingerprint = serde_json::to_string(&(
+            &desired.config,
+            &desired.hooks,
+            &desired.version,
+            &desired.driver,
+        ))
+        .unwrap_or_default();
         let unchanged = handles
             .get(&desired.id)
             .map(|handle| {
                 handle.revision == desired.revision
+                    && handle.activation_revision == desired.activation_revision
                     && handle.enabled == desired.enabled
                     && handle.fingerprint == fingerprint
             })
@@ -189,16 +209,28 @@ fn reconcile(
         handles.remove(&desired.id);
         let reporter = Reporter::new(&desired);
         let cancel = CancellationToken::new();
-        let task = spawn_driver(desired.clone(), reporter.clone(), cancel.clone(), work_dir.to_path_buf());
+        let lock = locks
+            .entry(desired.id.clone())
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone();
+        let task = spawn_driver(
+            desired.clone(),
+            reporter.clone(),
+            cancel.clone(),
+            work_dir.to_path_buf(),
+            ctx.clone(),
+            lock,
+        );
         handles.insert(
             desired.id.clone(),
             Handle {
                 revision: desired.revision,
+                activation_revision: desired.activation_revision,
                 enabled: desired.enabled,
                 fingerprint,
                 reporter,
                 cancel,
-                task,
+                _task: task,
             },
         );
     }
@@ -209,43 +241,61 @@ fn spawn_driver(
     reporter: Reporter,
     cancel: CancellationToken,
     work_dir: PathBuf,
+    ctx: HookContext,
+    lock: Arc<TokioMutex<()>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // One lifecycle at a time per extension: if a config change replaces
+        // this task, the old driver/deactivate must finish before activate.
+        let _serial = lock.lock().await;
         if !desired.enabled {
             reporter.set(ExtensionState::Stopped, "desabilitada pelo control plane");
             cancel.cancelled().await;
             return;
         }
+
+        if let Err(err) = hooks::prepare(&desired, &ctx, &reporter, &cancel).await {
+            reporter.set(ExtensionState::Error, err);
+            cancel.cancelled().await;
+            return;
+        }
+
         match desired.driver.as_str() {
             wm_ext::CLOUDFLARED_DRIVER => {
-                let config: wm_ext::CloudflaredConfig = match serde_json::from_value(desired.config.clone()) {
-                    Ok(config) => config,
+                match serde_json::from_value::<wm_ext::CloudflaredConfig>(desired.config.clone()) {
+                    Ok(config) => {
+                        cloudflared::run(
+                            config,
+                            reporter.clone(),
+                            cancel.clone(),
+                            work_dir.join("cloudflared"),
+                        )
+                        .await;
+                    }
                     Err(err) => {
                         reporter.set(
                             ExtensionState::Error,
                             format!("config do cloudflared inválida: {err}"),
                         );
                         cancel.cancelled().await;
-                        return;
                     }
-                };
-                cloudflared::run(config, reporter, cancel, work_dir.join("cloudflared")).await;
+                }
             }
             wm_ext::EXEC_DRIVER => {
-                let config: wm_ext::ExecConfig = match serde_json::from_value(desired.config.clone()) {
-                    Ok(config) => config,
+                match serde_json::from_value::<wm_ext::ExecConfig>(desired.config.clone()) {
+                    Ok(config) => {
+                        if let Err(err) = config.validate() {
+                            reporter.set(ExtensionState::Error, err);
+                            cancel.cancelled().await;
+                        } else {
+                            exec::run(config, reporter.clone(), cancel.clone()).await;
+                        }
+                    }
                     Err(err) => {
                         reporter.set(ExtensionState::Error, format!("config exec inválida: {err}"));
                         cancel.cancelled().await;
-                        return;
                     }
-                };
-                if let Err(err) = config.validate() {
-                    reporter.set(ExtensionState::Error, err);
-                    cancel.cancelled().await;
-                    return;
                 }
-                exec::run(config, reporter, cancel).await;
             }
             other => {
                 reporter.set(
@@ -255,6 +305,8 @@ fn spawn_driver(
                 cancel.cancelled().await;
             }
         }
+
+        hooks::deactivate(&desired, &ctx).await;
     })
 }
 
@@ -281,13 +333,27 @@ mod tests {
             id: "hello".into(),
             name: "Hello".into(),
             driver: "exec".into(),
+            version: "0.1.0".into(),
             revision: 1,
+            activation_revision: 0,
             enabled: true,
+            hooks: wm_proto::ExtensionHooks::default(),
             config: serde_json::json!({
                 "command": command,
                 "args": args,
                 "restart": "never"
             }),
+        }
+    }
+
+    fn hook_ctx(dir: &std::path::Path) -> hooks::HookContext {
+        hooks::HookContext {
+            node_id: Uuid::new_v4(),
+            node_name: "test".into(),
+            overlay_ip: "10.66.0.2".parse().unwrap(),
+            control_url: "http://127.0.0.1:8080".into(),
+            data_dir: dir.to_path_buf(),
+            extensions_dir: dir.join("extensions"),
         }
     }
 
@@ -317,7 +383,13 @@ mod tests {
         desired.enabled = false;
         let (desired_tx, desired_rx) = watch::channel(vec![desired]);
         let (status_tx, mut status_rx) = watch::channel(Vec::new());
-        let handle = tokio::spawn(run(desired_rx, status_tx, dir.path().to_path_buf()));
+        let ctx = hook_ctx(dir.path());
+        let handle = tokio::spawn(run(
+            desired_rx,
+            status_tx,
+            dir.path().to_path_buf(),
+            ctx,
+        ));
 
         let statuses = wait_for(&mut status_rx, |s| {
             s.len() == 1 && s[0].state == ExtensionState::Stopped
@@ -342,7 +414,13 @@ mod tests {
         let desired = desired_exec(script.to_str().unwrap(), vec![]);
         let (desired_tx, desired_rx) = watch::channel(vec![desired]);
         let (status_tx, mut status_rx) = watch::channel(Vec::new());
-        let handle = tokio::spawn(run(desired_rx, status_tx, dir.path().to_path_buf()));
+        let ctx = hook_ctx(dir.path());
+        let handle = tokio::spawn(run(
+            desired_rx,
+            status_tx,
+            dir.path().to_path_buf(),
+            ctx,
+        ));
 
         let statuses = wait_for(&mut status_rx, |s| {
             s.first().map(|status| status.state == ExtensionState::Running).unwrap_or(false)
@@ -354,6 +432,73 @@ mod tests {
 
         desired_tx.send(Vec::new()).unwrap();
         wait_for(&mut status_rx, |s| s.is_empty()).await;
+        handle.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lifecycle_hooks_run_install_activate_and_deactivate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = dir.path().join("scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let write_script = |name: &str, marker: &str| {
+            let path = scripts.join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\nprintf '%s' \"$WM_HOOK:$WM_EXTENSION_ID:$WM_NODE_NAME\" > \"$WM_EXTENSION_DIR/{marker}\"\n"
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let install = write_script("install.sh", "install.ok");
+        let activate = write_script("activate.sh", "activate.ok");
+        let deactivate = write_script("deactivate.sh", "deactivate.ok");
+        let hook = |path: &std::path::Path| wm_proto::HookSpec {
+            command: path.display().to_string(),
+            args: Vec::new(),
+            env: Default::default(),
+            timeout_secs: 5,
+            working_dir: None,
+        };
+        let mut desired = desired_exec("/bin/sleep", vec!["30"]);
+        desired.version = "1.2.3".into();
+        desired.hooks.install = Some(hook(&install));
+        desired.hooks.activate = Some(hook(&activate));
+        desired.hooks.deactivate = Some(hook(&deactivate));
+        let (desired_tx, desired_rx) = watch::channel(vec![desired]);
+        let (status_tx, mut status_rx) = watch::channel(Vec::new());
+        let ctx = hook_ctx(dir.path());
+        let ext_dir = ctx.extensions_dir.join("hello");
+        let handle = tokio::spawn(run(
+            desired_rx,
+            status_tx,
+            dir.path().to_path_buf(),
+            ctx,
+        ));
+
+        wait_for(&mut status_rx, |s| {
+            s.first().map(|status| status.state == ExtensionState::Running).unwrap_or(false)
+        })
+        .await;
+        assert!(ext_dir.join("install.ok").is_file());
+        assert!(ext_dir.join("activate.ok").is_file());
+        let body = std::fs::read_to_string(ext_dir.join("install.ok")).unwrap();
+        assert_eq!(body, "install:hello:test");
+
+        desired_tx.send(Vec::new()).unwrap();
+        wait_for(&mut status_rx, |s| s.is_empty()).await;
+        for _ in 0..50 {
+            if ext_dir.join("deactivate.ok").is_file() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(ext_dir.join("deactivate.ok").is_file(), "deactivate hook não rodou");
         handle.abort();
     }
 
@@ -382,13 +527,22 @@ mod tests {
             id: "cloudflared".into(),
             name: "Cloudflare Tunnel".into(),
             driver: "cloudflared".into(),
+            version: "0.1.0".into(),
             revision: 1,
+            activation_revision: 0,
             enabled: true,
+            hooks: wm_proto::ExtensionHooks::default(),
             config,
         };
         let (desired_tx, desired_rx) = watch::channel(vec![desired]);
         let (status_tx, mut status_rx) = watch::channel(Vec::new());
-        let handle = tokio::spawn(run(desired_rx, status_tx, dir.path().to_path_buf()));
+        let ctx = hook_ctx(dir.path());
+        let handle = tokio::spawn(run(
+            desired_rx,
+            status_tx,
+            dir.path().to_path_buf(),
+            ctx,
+        ));
 
         let statuses = wait_for(&mut status_rx, |s| {
             s.first()

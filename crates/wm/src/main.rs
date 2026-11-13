@@ -91,6 +91,13 @@ enum Command {
     },
     /// Abre a GUI local de compartilhamento.
     Gui(GuiArgs),
+    /// Lista e ativa/desativa extensões neste nó.
+    Extensions {
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        action: Option<ExtensionsAction>,
+    },
     /// Abre a TUI (o agente iniciado por ela continua rodando ao sair).
     Tui(TuiArgs),
     /// Diagnóstico da máquina e do nó.
@@ -105,8 +112,11 @@ enum Command {
 struct HostArgs {
     #[arg(long, env = "WM_PUBLIC_URL")]
     public_url: Option<String>,
-    #[arg(long, default_value = "127.0.0.1:8080")]
+    /// Endereço HTTP/API/relay (use --public-url para anunciar a porta pública).
+    #[arg(long, env = "WM_LISTEN", default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
+    #[command(flatten)]
+    stun: StunArgs,
     #[arg(long)]
     tls_cert: Option<PathBuf>,
     #[arg(long)]
@@ -119,7 +129,7 @@ struct HostArgs {
     name: Option<String>,
     #[arg(long)]
     no_agent: bool,
-    #[arg(long, default_value_t = DEFAULT_UDP_PORT)]
+    #[arg(long, env = "WM_UDP_PORT", default_value_t = DEFAULT_UDP_PORT)]
     udp_port: u16,
     #[arg(long, default_value_t = DEFAULT_MTU)]
     mtu: u16,
@@ -131,12 +141,36 @@ struct HostArgs {
     expose: Vec<String>,
 }
 
+/// Portas STUN de escuta e anúncio podem diferir atrás de NAT/proxy UDP.
+#[derive(clap::Args)]
+struct StunArgs {
+    /// Endereço UDP do servidor STUN (padrão: 0.0.0.0:3478).
+    #[arg(long, env = "WM_STUN_LISTEN")]
+    stun_listen: Option<SocketAddr>,
+    /// URL STUN pública (stun:host:porta); repetível, ou lista separada por vírgulas no env.
+    #[arg(long = "stun-url", env = "WM_STUN_URLS", value_delimiter = ',')]
+    stun_urls: Vec<String>,
+}
+
+impl StunArgs {
+    fn apply(self, cfg: &mut ControlConfig) {
+        if let Some(listen) = self.stun_listen {
+            cfg.stun_listen = listen;
+        }
+        if !self.stun_urls.is_empty() {
+            cfg.stun_urls = self.stun_urls;
+        }
+    }
+}
+
 #[derive(clap::Args)]
 struct ServeArgs {
     #[arg(long)]
     config: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(long, env = "WM_LISTEN")]
     listen: Option<SocketAddr>,
+    #[command(flatten)]
+    stun: StunArgs,
     #[arg(long)]
     public_url: Option<String>,
     #[arg(long)]
@@ -196,6 +230,14 @@ struct ShareArgs {
     /// Mantém o share desligado ao criar.
     #[arg(long)]
     disabled: bool,
+}
+
+#[derive(Subcommand)]
+enum ExtensionsAction {
+    /// Ativa a extensão neste nó.
+    Enable { id: String },
+    /// Desativa a extensão neste nó.
+    Disable { id: String },
 }
 
 #[derive(clap::Args)]
@@ -291,6 +333,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Rename { name } => run_rename(&root, &name).await,
         Command::Open { target, print } => run_open(&root, &target, print).await,
         Command::Gui(args) => gui::run(root, args.listen, !args.no_open).await,
+        Command::Extensions { json, action } => run_extensions(&root, json, action).await,
         Command::Tui(args) => run_tui(&root, args).await,
         Command::Doctor => run_doctor(&root).await,
         Command::Service(args) => run_service(args, &root).await,
@@ -324,9 +367,13 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
         ..Default::default()
     };
     cfg.apply_env();
+    // clap resolves CLI > environment > default for the listener.
+    cfg.listen = args.listen;
+    args.stun.apply(&mut cfg);
     cfg.validate()?;
 
     let listen = cfg.listen;
+    let local_control_url = host_control_url(listen, cfg.tls_cert.is_some(), &public_url);
     let cfg_for_server = cfg.clone();
     let server = tokio::spawn(async move {
         if let Err(err) = wm_control::server::run(cfg_for_server).await {
@@ -343,7 +390,8 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
 
     let agent_cfg = AgentConfig {
         data_dir: agent_dir.clone(),
-        control_url: Some(public_url.clone()),
+        // The colocated agent must not depend on proxy readiness/health routing.
+        control_url: Some(local_control_url.clone()),
         udp_port: args.udp_port,
         mtu: args.mtu,
         tun_name: None,
@@ -365,13 +413,20 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
         None => {
             let host_token = mint_join_token(&pool, &actor, "host-bootstrap", 1, 3600, &agent_cfg.tags).await?;
             println!("inscrevendo o nó local como gateway...");
-            let state = wm_core::join(&agent_cfg, &public_url, &host_token, args.name.as_deref())
+            let state = wm_core::join(&agent_cfg, &local_control_url, &host_token, args.name.as_deref())
                 .await
                 .context("inscrevendo o nó local")?;
             println!("  nó: {}  overlay: {}", state.node_name, state.overlay_ip);
             state
         }
     };
+
+    // Persist the public identity for invitations/GUI; transport for this host's
+    // running agent is overridden by agent_cfg with the local endpoint above.
+    if agent_state.control_url != public_url {
+        agent_state.control_url = public_url.clone();
+        agent_state.save(&agent_cfg.state_path())?;
+    }
 
     // O host é o gateway .1: reivindica o endereço reservado antes de subir o
     // agente. Se outro nó já ocupou (ex.: control restaurado), mantém o IP atual.
@@ -422,6 +477,7 @@ async fn run_serve(args: ServeArgs, root: PathBuf) -> anyhow::Result<()> {
             ..Default::default()
         },
     };
+    cfg.apply_env();
     if let Some(listen) = args.listen {
         cfg.listen = listen;
     }
@@ -434,7 +490,7 @@ async fn run_serve(args: ServeArgs, root: PathBuf) -> anyhow::Result<()> {
     if args.tls_key.is_some() {
         cfg.tls_key = args.tls_key;
     }
-    cfg.apply_env();
+    args.stun.apply(&mut cfg);
     cfg.validate()?;
     wm_control::server::run(cfg).await
 }
@@ -850,6 +906,68 @@ async fn run_local(root: &Path, method: &str, params: Value) -> anyhow::Result<(
     Ok(())
 }
 
+async fn run_extensions(
+    root: &Path,
+    as_json: bool,
+    action: Option<ExtensionsAction>,
+) -> anyhow::Result<()> {
+    match action {
+        Some(ExtensionsAction::Enable { id }) => {
+            let value = local_call(
+                root,
+                "extension_activation",
+                json!({ "id": id, "active": true }),
+            )
+            .await?;
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            } else {
+                println!("extensão '{id}' ativada neste nó");
+            }
+        }
+        Some(ExtensionsAction::Disable { id }) => {
+            let value = local_call(
+                root,
+                "extension_activation",
+                json!({ "id": id, "active": false }),
+            )
+            .await?;
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            } else {
+                println!("extensão '{id}' desativada neste nó");
+            }
+        }
+        None => {
+            let value = local_call(root, "extension_catalog", Value::Null).await?;
+            let catalog: Vec<wm_proto::NodeExtensionView> = serde_json::from_value(value)?;
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&catalog)?);
+            } else if catalog.is_empty() {
+                println!("nenhuma extensão no catálogo");
+            } else {
+                println!("{:<20} {:<12} {:<6} {:<10} mensagem", "EXTENSÃO", "DRIVER", "ATIVA", "ESTADO");
+                for view in catalog {
+                    let (state, message) = view
+                        .status
+                        .as_ref()
+                        .map(|status| (status.state.to_string(), status.message.clone().unwrap_or_default()))
+                        .unwrap_or_else(|| ("—".into(), String::new()));
+                    println!(
+                        "{:<20} {:<12} {:<6} {:<10} {}",
+                        view.id,
+                        view.driver,
+                        if view.active { "on" } else { "off" },
+                        state,
+                        message
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn run_tui(root: &Path, args: TuiArgs) -> anyhow::Result<()> {
     wm_tui::run_with(
         root.to_path_buf(),
@@ -1029,6 +1147,20 @@ async fn mint_join_token(
     Ok(token)
 }
 
+// With native TLS, retain the public hostname for certificate validation.
+// Behind a TLS-terminating proxy, bootstrap directly over the local HTTP listener.
+fn host_control_url(addr: SocketAddr, native_tls: bool, public_url: &str) -> String {
+    if native_tls {
+        return public_url.to_string();
+    }
+    let ip = match addr.ip() {
+        std::net::IpAddr::V4(ip) if ip.is_unspecified() => std::net::Ipv4Addr::LOCALHOST.into(),
+        std::net::IpAddr::V6(ip) if ip.is_unspecified() => std::net::Ipv6Addr::LOCALHOST.into(),
+        ip => ip,
+    };
+    format!("http://{}", SocketAddr::new(ip, addr.port()))
+}
+
 async fn wait_for_port(addr: SocketAddr) -> anyhow::Result<()> {
     let ip = if addr.ip().is_unspecified() {
         "127.0.0.1".parse().unwrap()
@@ -1042,5 +1174,63 @@ async fn wait_for_port(addr: SocketAddr) -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     bail!("control plane não abriu em {addr}")
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[test]
+    fn host_bootstrap_bypasses_public_proxy() {
+        let public = "https://mesh.example";
+        for (listen, expected) in [
+            ("0.0.0.0:8080", "http://127.0.0.1:8080"),
+            ("[::]:8081", "http://[::1]:8081"),
+            ("127.0.0.1:9000", "http://127.0.0.1:9000"),
+        ] {
+            assert_eq!(host_control_url(listen.parse().unwrap(), false, public), expected);
+            assert_eq!(host_control_url(listen.parse().unwrap(), true, public), public);
+        }
+    }
+
+    #[test]
+    fn host_accepts_custom_ports_and_derives_stun_advertisement() {
+        let cli = Cli::try_parse_from([
+            "wm", "host", "--listen", "0.0.0.0:8443", "--public-url",
+            "https://mesh.example:8443", "--stun-listen", "0.0.0.0:5349",
+            "--udp-port", "51820",
+        ]).unwrap();
+        let Command::Host(args) = cli.command else { panic!("expected host") };
+        assert_eq!(args.listen.port(), 8443);
+        assert_eq!(args.udp_port, 51820);
+        let mut cfg = ControlConfig {
+            public_url: args.public_url.unwrap(),
+            ..Default::default()
+        };
+        args.stun.apply(&mut cfg);
+        cfg.validate().unwrap();
+        assert_eq!(cfg.stun_urls, ["stun:mesh.example:5349"]);
+        assert_eq!(cfg.relay_public_url(), "https://mesh.example:8443/relay");
+    }
+
+    #[test]
+    fn serve_accepts_separate_public_stun_ports() {
+        let cli = Cli::try_parse_from([
+            "wm", "serve", "--stun-listen", "0.0.0.0:5349",
+            "--stun-url", "stun:mesh.example:443",
+            "--stun-url", "stun:backup.example:5350",
+        ]).unwrap();
+        let Command::Serve(args) = cli.command else { panic!("expected serve") };
+        let mut cfg = ControlConfig::default();
+        args.stun.apply(&mut cfg);
+        cfg.validate().unwrap();
+        assert_eq!(cfg.stun_listen.port(), 5349);
+        assert_eq!(cfg.stun_urls, ["stun:mesh.example:443", "stun:backup.example:5350"]);
+    }
+
+    #[test]
+    fn rejects_invalid_stun_bind_address() {
+        assert!(Cli::try_parse_from(["wm", "host", "--stun-listen", "0.0.0.0:99999"]).is_err());
+    }
 }
 

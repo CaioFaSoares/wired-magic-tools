@@ -19,7 +19,9 @@
 //!   [`ExtensionRegistry::load`] and implement a driver under
 //!   `wm-core/src/extensions`. `cloudflared` is the reference implementation.
 
+pub mod adapters;
 pub mod cloudflared;
+pub mod node;
 pub mod store;
 
 use std::collections::BTreeMap;
@@ -29,7 +31,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use axum::Json;
 use axum::extract::{Path as AxumPath, State};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -38,7 +40,7 @@ use uuid::Uuid;
 use wm_ext::{
     CLOUDFLARED_ID, ExtensionManifest, NodeDriver, load_dir, seed_builtin_manifests,
 };
-use wm_proto::{ExtensionDesired, ExtensionStatus};
+use wm_proto::{ExtensionDesired, ExtensionStatus, NodeExtensionView};
 
 use crate::api::{AdminAuth, ApiErr, client_ip};
 use crate::db::{self, NodeRow};
@@ -164,6 +166,20 @@ impl ExtensionRegistry {
         let manifests = self.manifests();
         let mut out = Vec::new();
         for manifest in manifests {
+            let active = match self.is_active(state, &manifest, node).await {
+                Ok(active) => active,
+                Err(err) => {
+                    tracing::warn!(extension = %manifest.id, %err, "falha ao ler ativação");
+                    continue;
+                }
+            };
+            if !active {
+                continue;
+            }
+            let activation_revision = self
+                .activation_revision(state, &manifest.id, node)
+                .await
+                .unwrap_or(0);
             let manager = self.code.get(&manifest.id).cloned();
             let desired = match manifest.node_driver {
                 NodeDriver::Cloudflared => match &manager {
@@ -174,7 +190,12 @@ impl ExtensionRegistry {
                 NodeDriver::None => Ok(None),
             };
             match desired {
-                Ok(Some(desired)) => out.push(desired),
+                Ok(Some(mut desired)) => {
+                    desired.version = manifest.version.clone();
+                    desired.activation_revision = activation_revision;
+                    desired.hooks = manifest.hooks.clone();
+                    out.push(desired);
+                }
                 Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(extension = %manifest.id, %err, "falha ao montar estado desejado");
@@ -182,6 +203,172 @@ impl ExtensionRegistry {
             }
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    /// Effective activation for one node. An absent row falls back to the
+    /// pre-activation behavior so an existing deployment does not lose routes
+    /// or exec sidecars when it upgrades.
+    pub async fn is_active(
+        &self,
+        state: &AppState,
+        manifest: &ExtensionManifest,
+        node: &NodeRow,
+    ) -> anyhow::Result<bool> {
+        if let Some(row) = store::get_activation(&state.db, &manifest.id, node.uuid()).await? {
+            return Ok(row.enabled());
+        }
+        match manifest.node_driver {
+            NodeDriver::Cloudflared => cloudflared::has_config(state, node).await,
+            NodeDriver::Exec => {
+                if let Some(record) = store::get_record(&state.db, &manifest.id, node.uuid()).await? {
+                    return Ok(record.enabled());
+                }
+                Ok(manifest.default_active)
+            }
+            NodeDriver::None => Ok(manifest.default_active),
+        }
+    }
+
+    pub async fn activation_revision(
+        &self,
+        state: &AppState,
+        extension_id: &str,
+        node: &NodeRow,
+    ) -> anyhow::Result<u64> {
+        Ok(store::get_activation(&state.db, extension_id, node.uuid())
+            .await?
+            .map(|row| row.revision())
+            .unwrap_or(0))
+    }
+
+    /// Catalog used by the TUI/local GUI: one row per manifest for this node.
+    pub async fn node_catalog(
+        &self,
+        state: &AppState,
+        node: &NodeRow,
+    ) -> anyhow::Result<Vec<NodeExtensionView>> {
+        let statuses: BTreeMap<String, ExtensionStatus> =
+            store::list_statuses_for_node(&state.db, node.uuid())
+                .await?
+                .into_iter()
+                .map(|row| (row.extension_id.clone(), row.view()))
+                .collect();
+        let mut out = Vec::new();
+        for manifest in self.manifests() {
+            let active = self.is_active(state, &manifest, node).await?;
+            let configured = match manifest.node_driver {
+                NodeDriver::Cloudflared => cloudflared::has_config(state, node).await?,
+                NodeDriver::Exec => store::get_record(&state.db, &manifest.id, node.uuid())
+                    .await?
+                    .is_some(),
+                NodeDriver::None => false,
+            };
+            let activation_revision = self.activation_revision(state, &manifest.id, node).await?;
+            out.push(NodeExtensionView {
+                id: manifest.id.clone(),
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                description: manifest.description.clone(),
+                driver: manifest.node_driver.as_str().to_string(),
+                ui: manifest.ui_kind().to_string(),
+                builtin: self.is_builtin(&manifest.id),
+                active,
+                configured,
+                activation_revision,
+                default_config: !manifest.default_config.is_null(),
+                status: statuses.get(&manifest.id).cloned(),
+            });
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(out)
+    }
+
+    /// Activates or deactivates an extension for one node. When activating a
+    /// declarative extension without explicit config, `default_config` is
+    /// materialized so "ativar" is enough to bootstrap the sidecar.
+    pub async fn set_node_activation(
+        &self,
+        state: &AppState,
+        node: &NodeRow,
+        extension_id: &str,
+        active: bool,
+        actor: &str,
+    ) -> anyhow::Result<Option<NodeExtensionView>> {
+        let Some(manifest) = self.manifest(extension_id) else {
+            return Ok(None);
+        };
+        if active && manifest.node_driver == NodeDriver::Exec {
+            let existing = store::get_record(&state.db, extension_id, node.uuid()).await?;
+            match existing {
+                Some(record) if !record.enabled() => {
+                    let config = record.config_value();
+                    validate_generic_config(&manifest, &config)
+                        .map_err(|err| anyhow::anyhow!("{}", err.message))?;
+                    store::upsert_record(
+                        &state.db,
+                        extension_id,
+                        node.uuid(),
+                        true,
+                        &config,
+                        actor,
+                    )
+                    .await?;
+                }
+                Some(_) => {}
+                None if !manifest.default_config.is_null() => {
+                    validate_generic_config(&manifest, &manifest.default_config)
+                        .map_err(|err| anyhow::anyhow!("{}", err.message))?;
+                    store::upsert_record(
+                        &state.db,
+                        extension_id,
+                        node.uuid(),
+                        true,
+                        &manifest.default_config,
+                        actor,
+                    )
+                    .await?;
+                }
+                None => {}
+            }
+        }
+        store::set_activation(&state.db, extension_id, node.uuid(), active, actor).await?;
+        if !active {
+            // Do not show a stale running state for a deactivated extension.
+            store::delete_status(&state.db, extension_id, node.uuid()).await?;
+        }
+        match adapters::sync_node(state, node).await {
+            Ok(true) => state.bump_version(),
+            Ok(false) => {}
+            Err(err) => tracing::warn!(extension = %extension_id, %err, "adapter sync falhou"),
+        }
+        let catalog = self.node_catalog(state, node).await?;
+        Ok(catalog.into_iter().find(|view| view.id == extension_id))
+    }
+
+    /// Exposes requested by active adapters for this node.
+    pub async fn exposes_for(&self, state: &AppState, node: &NodeRow) -> Vec<wm_proto::MeshExpose> {
+        if node.status() != wm_proto::NodeStatus::Active {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for manifest in self.manifests() {
+            if manifest.adapter.exposes.is_empty() {
+                continue;
+            }
+            let active = self.is_active(state, &manifest, node).await.unwrap_or(false);
+            if !active {
+                continue;
+            }
+            for expose in &manifest.adapter.exposes {
+                let mesh: wm_proto::MeshExpose = (*expose).into();
+                if seen.insert(mesh.overlay_port) {
+                    out.push(mesh);
+                }
+            }
+        }
+        out.sort_by_key(|expose| expose.overlay_port);
         out
     }
 
@@ -265,6 +452,14 @@ impl ExtensionRegistry {
             let settings = cloudflared_settings
                 .iter()
                 .find(|s| s.node_id == node_id);
+            let active = self
+                .is_active(state, &manifest, &node)
+                .await
+                .unwrap_or(false);
+            let activation_revision = store::get_activation(&state.db, id, node.uuid())
+                .await?
+                .map(|row| row.revision())
+                .unwrap_or(0);
             let (enabled, revision, config, updated_at) = if id == CLOUDFLARED_ID {
                 let settings = settings;
                 (
@@ -297,6 +492,8 @@ impl ExtensionRegistry {
                 overlay_ip: node.overlay_ip(),
                 online: node.online(now) || state.relay.is_online(node.uuid()),
                 enabled,
+                active,
+                activation_revision,
                 revision,
                 config,
                 status: statuses.get(&node_id).cloned(),
@@ -331,8 +528,11 @@ async fn generic_desired_for(
         id: manifest.id.clone(),
         name: manifest.name.clone(),
         driver: manifest.node_driver.as_str().to_string(),
+        version: manifest.version.clone(),
         revision: record.revision(),
+        activation_revision: 0,
         enabled: true,
+        hooks: manifest.hooks.clone(),
         config,
     }))
 }
@@ -367,6 +567,8 @@ pub struct ExtensionNodeView {
     pub overlay_ip: std::net::Ipv4Addr,
     pub online: bool,
     pub enabled: bool,
+    pub active: bool,
+    pub activation_revision: u64,
     pub revision: u64,
     pub config: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -386,6 +588,11 @@ pub struct ExtensionDetail {
 pub struct ReloadResult {
     pub manifests: Vec<ExtensionView>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActivationInput {
+    pub active: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -419,6 +626,11 @@ pub async fn reload_extensions(
 ) -> Result<Json<ReloadResult>, ApiErr> {
     auth.require_csrf(&headers)?;
     let warnings = state.extensions.reload()?;
+    // Apply new adapter effects immediately; exposes are already recomputed on
+    // the next map build, shares/labels otherwise wait for the 30s loop.
+    if let Err(err) = adapters::sync_all(&state).await {
+        tracing::warn!(%err, "adapter sync após reload falhou");
+    }
     // A manifest added/removed only reaches agents when the long-poll wakes up.
     state.bump_version();
     db::audit(
@@ -582,6 +794,58 @@ fn validate_generic_config(
     }
 }
 
+pub async fn put_activation(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    headers: axum::http::HeaderMap,
+    AxumPath((id, node_id)): AxumPath<(String, Uuid)>,
+    Json(input): Json<ActivationInput>,
+) -> Result<Json<ExtensionNodeView>, ApiErr> {
+    auth.require_csrf(&headers)?;
+    let Some(node) = db::node_by_id(&state.db, node_id).await? else {
+        return Err(ApiErr::not_found("node_not_found", "nó não encontrado"));
+    };
+    let actor = format!("admin:{}", auth.username());
+    if state
+        .extensions
+        .set_node_activation(&state, &node, &id, input.active, &actor)
+        .await?
+        .is_none()
+    {
+        return Err(ApiErr::not_found(
+            "extension_not_found",
+            "extensão não encontrada",
+        ));
+    }
+    let view = state
+        .extensions
+        .detail(&state, &id)
+        .await?
+        .and_then(|detail| {
+            detail
+                .nodes
+                .into_iter()
+                .find(|view| view.node_id == node.uuid())
+        })
+        .ok_or_else(|| ApiErr::internal("nó desapareceu do detalhe da extensão"))?;
+    db::audit(
+        &state.db,
+        &actor,
+        if input.active {
+            "extension.activate"
+        } else {
+            "extension.deactivate"
+        },
+        &format!("{id}/{}", node.name),
+        None,
+        client_ip(&headers).as_deref(),
+    )
+    .await
+    .ok();
+    state.bump_version();
+    Ok(Json(view))
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -596,7 +860,13 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             get(get_extension_node)
                 .put(put_extension_node)
                 .delete(delete_extension_node),
-        );
+        )
+        .route(
+            "/admin/extensions/{id}/nodes/{node_id}/activation",
+            put(put_activation),
+        )
+        .route("/node/extensions", get(node::list))
+        .route("/node/extensions/{id}", put(node::set_active));
     for extension in state.extensions.code_extensions() {
         router = router.merge(extension.router());
     }

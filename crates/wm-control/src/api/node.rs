@@ -256,6 +256,7 @@ pub async fn build_map(state: &Arc<AppState>, me: &db::NodeRow) -> anyhow::Resul
     };
     let extensions = state.extensions.desired_for(state, me).await;
     let shares = super::shares::map_shares(state, &nodes).await;
+    let exposes = state.extensions.exposes_for(state, me).await;
     Ok(NetworkMap {
         version: state.current_version(),
         protocol: wm_proto::PROTOCOL_VERSION,
@@ -270,6 +271,7 @@ pub async fn build_map(state: &Arc<AppState>, me: &db::NodeRow) -> anyhow::Resul
         acl,
         extensions,
         shares,
+        exposes,
         server_time: chrono::Utc::now(),
     })
 }

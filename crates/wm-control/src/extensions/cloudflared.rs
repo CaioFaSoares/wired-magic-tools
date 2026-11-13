@@ -118,8 +118,11 @@ impl ControlExtension for CloudflaredExtension {
             id: CLOUDFLARED_ID.into(),
             name: self.manifest().name,
             driver: wm_ext::CLOUDFLARED_DRIVER.into(),
+            version: self.manifest().version,
             revision,
+            activation_revision: 0,
             enabled,
+            hooks: wm_proto::ExtensionHooks::default(),
             config: serde_json::to_value(&config)?,
         }))
     }
@@ -163,6 +166,8 @@ pub struct CloudflaredNodeView {
     pub hostname: String,
     pub overlay_ip: std::net::Ipv4Addr,
     pub online: bool,
+    pub active: bool,
+    pub activation_revision: u64,
     pub binary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tunnel_id: Option<String>,
@@ -209,6 +214,15 @@ pub struct NodeSettingsInput {
     /// `None` keeps the current secret; `Some("")` clears it.
     #[serde(default)]
     pub credentials_json: Option<String>,
+}
+
+/// True when the node already has a tunnel or route. Used as the
+/// pre-activation default so an upgraded deployment keeps working.
+pub(super) async fn has_config(state: &AppState, node: &NodeRow) -> anyhow::Result<bool> {
+    if store::get_node_settings(&state.db, node.uuid()).await?.is_some() {
+        return Ok(true);
+    }
+    Ok(!store::list_routes_for_node(&state.db, node.uuid()).await?.is_empty())
 }
 
 struct ValidatedRoute {
@@ -348,6 +362,18 @@ pub async fn create_route(
     )
     .await
     .ok();
+    // Creating a route is an implicit activation for that node.
+    if let Err(err) = store::set_activation(
+        &state.db,
+        CLOUDFLARED_ID,
+        input.node_id,
+        true,
+        &format!("admin:{}", auth.username()),
+    )
+    .await
+    {
+        tracing::warn!(%err, "falha ao ativar cloudflared após criar rota");
+    }
     state.bump_version();
     let mut views = build_route_views(&state, vec![row]).await?;
     views
@@ -392,6 +418,18 @@ pub async fn update_route(
     )
     .await
     .ok();
+    // Updating a route is also an implicit activation for that node.
+    if let Err(err) = store::set_activation(
+        &state.db,
+        CLOUDFLARED_ID,
+        input.node_id,
+        true,
+        &format!("admin:{}", auth.username()),
+    )
+    .await
+    {
+        tracing::warn!(%err, "falha ao ativar cloudflared após criar rota");
+    }
     state.bump_version();
     let mut views = build_route_views(&state, vec![row]).await?;
     views
@@ -536,6 +574,16 @@ async fn build_node_views(state: &AppState) -> Result<Vec<CloudflaredNodeView>, 
     let mut out = Vec::with_capacity(nodes.len());
     for node in nodes {
         let id = node.id.clone();
+        let active = state
+            .extensions
+            .is_active(&state, &wm_ext::builtin_cloudflared_manifest(), &node)
+            .await
+            .unwrap_or(false);
+        let activation_revision = state
+            .extensions
+            .activation_revision(&state, CLOUDFLARED_ID, &node)
+            .await
+            .unwrap_or(0);
         let setting = settings.iter().find(|s| s.node_id == id);
         let node_routes: Vec<&store::CloudflaredRouteRow> =
             routes.iter().filter(|r| r.node_id == id).collect();
@@ -545,6 +593,8 @@ async fn build_node_views(state: &AppState) -> Result<Vec<CloudflaredNodeView>, 
             hostname: node.hostname.clone(),
             overlay_ip: node.overlay_ip(),
             online: node.online(now) || state.relay.is_online(node.uuid()),
+            active,
+            activation_revision,
             binary: setting
                 .map(|s| s.binary.clone())
                 .unwrap_or_else(|| wm_ext::cloudflared::DEFAULT_BINARY.into()),

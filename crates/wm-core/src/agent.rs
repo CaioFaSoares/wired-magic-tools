@@ -163,6 +163,9 @@ struct DataPlane {
     relay_info_tx: watch::Sender<Option<RelayInfo>>,
     relay_connected: Arc<AtomicBool>,
     extensions_tx: watch::Sender<Vec<ExtensionDesired>>,
+    base_exposes: Vec<state::ExposeSpec>,
+    extension_exposes: Vec<state::ExposeSpec>,
+    expose_tx: watch::Sender<Vec<state::ExposeSpec>>,
     shares: Vec<ShareInfo>,
     state_path: PathBuf,
     relay_online: HashSet<NodeId>,
@@ -501,6 +504,17 @@ impl DataPlane {
         }
     }
 
+    fn publish_exposes(&self) {
+        let mut merged: Vec<state::ExposeSpec> = self.base_exposes.clone();
+        let mut seen: HashSet<u16> = merged.iter().map(|spec| spec.overlay_port).collect();
+        for expose in &self.extension_exposes {
+            if seen.insert(expose.overlay_port) {
+                merged.push(*expose);
+            }
+        }
+        let _ = self.expose_tx.send(merged);
+    }
+
     async fn on_timer(&mut self) {
         let ids: Vec<NodeId> = self.engine.peers().map(|p| p.id).collect();
         let relay_connected = self.relay_connected.load(Ordering::Relaxed);
@@ -759,6 +773,12 @@ pub async fn run_until(cfg: AgentConfig, shutdown: oneshot::Receiver<()>) -> any
     let control = ControlClient::new(&control_url)?;
 
     cfg.data_dir_ensure()?;
+    // Node-side hook assets (scripts) are bundled with the binary. The control
+    // seeds its own data dir; the agent must have them too, including on remote
+    // nodes that never share a filesystem with the control.
+    if let Err(err) = wm_ext::seed_builtin_manifests(&cfg.data_dir.join("extensions")) {
+        tracing::warn!(%err, "não foi possível semear assets de extensões no nó");
+    }
     let pid_path = cfg.pid_path();
     std::fs::write(&pid_path, format!("{}\n", std::process::id()))?;
 
@@ -819,6 +839,7 @@ async fn run_inner(
         cfg.expose.clone()
     };
     let overlay_ip = state.overlay_ip;
+    let (expose_tx, expose_rx) = watch::channel(expose_specs.clone());
     let (extensions_tx, extensions_rx) = watch::channel::<Vec<ExtensionDesired>>(Vec::new());
     let (extension_status_tx, extension_status_rx) =
         watch::channel::<Vec<ExtensionStatus>>(Vec::new());
@@ -834,14 +855,23 @@ async fn run_inner(
         stun_urls_tx,
     )));
     tasks.push(tokio::spawn(async move {
-        if let Err(err) = crate::expose::run(overlay_ip, expose_specs).await {
+        if let Err(err) = crate::expose::run(overlay_ip, expose_rx).await {
             tracing::error!(%err, "forward de portas encerrou");
         }
     }));
+    let hook_ctx = crate::extensions::hooks::HookContext {
+        node_id: state.node_id,
+        node_name: state.node_name.clone(),
+        overlay_ip,
+        control_url: state.control_url.clone(),
+        data_dir: cfg.data_dir.clone(),
+        extensions_dir: cfg.data_dir.join("extensions"),
+    };
     tasks.push(tokio::spawn(crate::extensions::run(
         extensions_rx,
         extension_status_tx,
         cfg.data_dir.join("extensions"),
+        hook_ctx,
     )));
     tasks.push(tokio::spawn(report_loop(
         control.clone(),
@@ -897,6 +927,9 @@ async fn run_inner(
         relay_info_tx,
         relay_connected,
         extensions_tx,
+        base_exposes: expose_specs,
+        extension_exposes: Vec::new(),
+        expose_tx,
         shares: Vec::new(),
         state_path: cfg.state_path(),
         relay_online: HashSet::new(),
@@ -941,6 +974,9 @@ async fn data_loop(plane: &mut DataPlane, mut rx: mpsc::Receiver<Cmd>) {
             Cmd::Map(map) => plane.on_map(*map).await,
             Cmd::Extensions(desired) => {
                 let _ = plane.extensions_tx.send(desired);
+                // Revoked/pending nodes must stop adapter-provided exposes.
+                plane.extension_exposes.clear();
+                plane.publish_exposes();
             }
             Cmd::Control { connected, error } => {
                 plane.control_connected = connected;

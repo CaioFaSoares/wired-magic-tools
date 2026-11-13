@@ -2,6 +2,8 @@
 .git
 .gitignore
 .env
+.env.*
+!.env.example
 *.log
 .DS_Store
 
@@ -9,6 +11,9 @@
 target/
 target-linux/
 target-final/
+**/target/
+**/node_modules/
+**/*.tsbuildinfo
 .cargo-home/
 .pnpm-store/
 web/node_modules/
@@ -28,3 +33,15 @@ Makefile
 
 # Config local do Docker usada apenas para builds neste workspace.
 .docker/
+
+# Ferramentas locais, relatórios e estado privado não são entradas de compilação.
+.harness/
+.goratrix/
+.pace/
+playwright-report/
+test-results/
+coverage/
+data/
+*.db
+*.db-shm
+*.db-wal

@@ -366,6 +366,30 @@ async fn dispatch(
                 .map(|status| serde_json::to_value(status).map_err(|err| err.to_string()))
                 .unwrap_or_else(|| Err(format!("extensão '{id}' não encontrada no nó")))
         }
+        "extension_catalog" => {
+            let catalog = control
+                .client
+                .node_extensions(&control.token)
+                .await
+                .map_err(|err| err.to_string())?;
+            serde_json::to_value(catalog).map_err(|err| err.to_string())
+        }
+        "extension_activation" => {
+            let id = params
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("informe id")?;
+            let active = params
+                .get("active")
+                .and_then(Value::as_bool)
+                .ok_or("informe active")?;
+            let view = control
+                .client
+                .set_node_extension(&control.token, id, active)
+                .await
+                .map_err(|err| err.to_string())?;
+            serde_json::to_value(view).map_err(|err| err.to_string())
+        }
         "logs" => Ok(json!({
             "lines": [],
             "note": "use `journalctl -u wired-magic-agent` (Linux) ou Console.app (macOS)"

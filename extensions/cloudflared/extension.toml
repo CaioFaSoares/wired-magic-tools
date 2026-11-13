@@ -1,0 +1,14 @@
+# Extensão embutida: Cloudflare Tunnel.
+# Esta pasta é a fonte de verdade do manifesto; o control copia para
+# <data_dir>/extensions/cloudflared/ no primeiro boot.
+id = "cloudflared"
+name = "Cloudflare Tunnel"
+version = "0.1.0"
+description = "Expõe serviços locais de um nó pela Cloudflare, com rotas por projeto e URL pública gerenciadas pelo painel."
+author = "wired-magic"
+homepage = "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/"
+node_driver = "cloudflared"
+ui = "cloudflared"
+# A extensão aparece no catálogo, mas só roda depois de ativada por nó.
+# Criar uma rota pelo painel ativa automaticamente.
+default_active = false

@@ -1,7 +1,7 @@
 # Deploy de um compose para Coolify (ou `docker compose up -d` numa VPS Linux).
 #
 # O Coolify cuida do TLS e do domínio: aponte o domínio para o serviço `wm` na
-# porta interna 8080. As portas UDP são publicadas direto pelo Docker porque o
+# porta interna WM_HTTP_PORT (padrão: 8080). As portas UDP saem direto porque o
 # proxy HTTP não transporta STUN/WireGuard.
 #
 # Variáveis obrigatórias (configure no Coolify em Environment Variables, ou
@@ -11,12 +11,18 @@
 #
 # Opcional:
 #   WM_NODE_NAME       nome do nó gateway no painel (padrão: gateway)
+#   WM_HTTP_PORT       porta HTTP interna/proxy (padrão: 8080)
+#   WM_STUN_PORT       porta STUN interna e externa UDP (padrão: 3478)
+#   WM_UDP_PORT        porta WireGuard interna e externa UDP (padrão: 41641)
 
 services:
   wm:
     build:
       context: .
       dockerfile: Dockerfile
+      # BuildKit mantém caches de pnpm/Cargo no builder do host do Coolify.
+      # Sem cache_to/cache_from remoto ou dependência de docker compose watch.
+      target: runtime
     restart: unless-stopped
     hostname: wired-magic
 
@@ -27,11 +33,13 @@ services:
       - --public-url
       - ${WM_PUBLIC_URL:?defina WM_PUBLIC_URL com a URL publica, sem :8080}
       - --listen
-      - 0.0.0.0:8080
+      - 0.0.0.0:${WM_HTTP_PORT:-8080}
+      - --stun-listen
+      - 0.0.0.0:${WM_STUN_PORT:-3478}
       - --data-dir
       - /data
       - --udp-port
-      - "41641"
+      - "${WM_UDP_PORT:-41641}"
       - --name
       - ${WM_NODE_NAME:-gateway}
 
@@ -41,13 +49,13 @@ services:
       WM_DATA_DIR: /data
       WM_LOG: ${WM_LOG:-info}
 
-    # O proxy do Coolify alcança 8080 pela rede interna; não publicamos 8080/tcp
-    # para não expor o painel em HTTP puro. Só o que o proxy não cobre sai direto.
+    # O proxy do Coolify deve usar WM_HTTP_PORT pela rede interna; não publicamos
+    # HTTP puro. UDP usa a mesma porta interna/externa para não anunciar porta errada.
     expose:
-      - "8080"
+      - "${WM_HTTP_PORT:-8080}"
     ports:
-      - "3478:3478/udp"   # STUN
-      - "41641:41641/udp" # endpoint WireGuard do nó gateway
+      - "${WM_STUN_PORT:-3478}:${WM_STUN_PORT:-3478}/udp" # STUN
+      - "${WM_UDP_PORT:-41641}:${WM_UDP_PORT:-41641}/udp" # WireGuard do gateway
 
     volumes:
       - wm-data:/data
@@ -60,7 +68,7 @@ services:
       - NET_ADMIN
 
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${WM_HTTP_PORT:-8080}/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

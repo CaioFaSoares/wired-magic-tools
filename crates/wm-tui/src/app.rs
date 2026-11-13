@@ -9,19 +9,20 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::TableState;
 use uuid::Uuid;
-use wm_proto::{AgentStatus, ExtensionStatus, PeerStatus, ShareInfo};
+use wm_proto::{AgentStatus, ExtensionStatus, NodeExtensionView, PeerStatus, ShareInfo};
 
 use crate::agent;
 use crate::persist::{
     self, AgentSettings, EnrolledNode, NoticeRecord, PersistedJob, PersistedState, SnapshotCache,
 };
 
-pub const TABS: [&str; 8] = [
+pub const TABS: [&str; 9] = [
     "Início",
     "Peers",
     "Shares",
     "Mapa",
     "Agente",
+    "Extensões",
     "Serviços",
     "Console",
     "Ajuda",
@@ -31,9 +32,10 @@ pub const TAB_PEERS: usize = 1;
 pub const TAB_SHARES: usize = 2;
 pub const TAB_TOPOLOGY: usize = 3;
 pub const TAB_AGENT: usize = 4;
-pub const TAB_SERVICES: usize = 5;
-pub const TAB_CONSOLE: usize = 6;
-pub const TAB_HELP: usize = 7;
+pub const TAB_EXTENSIONS: usize = 5;
+pub const TAB_SERVICES: usize = 6;
+pub const TAB_CONSOLE: usize = 7;
+pub const TAB_HELP: usize = 8;
 
 pub const MAX_CONSOLE_LINES: usize = 3_000;
 pub const MAX_HISTORY: usize = 100;
@@ -99,6 +101,9 @@ pub enum MouseAction {
     SelectPeer(usize),
     SelectShare(usize),
     SelectJob(usize),
+    SelectExtension(usize),
+    ToggleExtension,
+    OpenExtensionsPanel,
     OpenMenu,
     MenuSelect(usize),
     MenuClose,
@@ -423,6 +428,7 @@ pub struct App {
     pub peers: Vec<PeerStatus>,
     pub shares: Vec<ShareInfo>,
     pub extensions: Vec<ExtensionStatus>,
+    pub extension_catalog: Vec<NodeExtensionView>,
     pub node: Option<EnrolledNode>,
     /// Why `agent-state.json` could not be read (permissions/parse), if so.
     pub node_error: Option<String>,
@@ -433,6 +439,7 @@ pub struct App {
     pub table: TableState,
     pub shares_table: TableState,
     pub jobs_table: TableState,
+    pub extensions_table: TableState,
     pub jobs: Vec<Job>,
     pub agent: AgentView,
     pub settings: AgentSettings,
@@ -486,6 +493,7 @@ impl App {
             peers: Vec::new(),
             shares: Vec::new(),
             extensions: Vec::new(),
+            extension_catalog: Vec::new(),
             node: None,
             node_error: None,
             live: false,
@@ -495,6 +503,7 @@ impl App {
             table: TableState::default(),
             shares_table: TableState::default(),
             jobs_table: TableState::default(),
+            extensions_table: TableState::default(),
             jobs: Vec::new(),
             agent: AgentView::default(),
             settings: state.settings.clone(),
@@ -644,6 +653,12 @@ impl App {
         self.jobs_table
             .selected()
             .and_then(|index| self.jobs.get(index))
+    }
+
+    pub fn selected_extension(&self) -> Option<&NodeExtensionView> {
+        self.extensions_table
+            .selected()
+            .and_then(|index| self.extension_catalog.get(index))
     }
 
     pub fn agent_label(&self) -> String {
@@ -834,6 +849,7 @@ impl App {
             self.peers = snapshot.peers;
             self.shares = snapshot.shares;
             self.extensions = snapshot.extensions;
+            self.extension_catalog = snapshot.extension_catalog;
             self.cached_at = Some(Utc::now());
             self.live = true;
             if self.agent.starting.is_some() {
@@ -880,6 +896,14 @@ impl App {
         {
             self.jobs_table
                 .select((!self.jobs.is_empty()).then_some(0));
+        }
+        if self
+            .extensions_table
+            .selected()
+            .is_none_or(|index| index >= self.extension_catalog.len())
+        {
+            self.extensions_table
+                .select((!self.extension_catalog.is_empty()).then_some(0));
         }
     }
 
@@ -1196,6 +1220,7 @@ mod tests {
             peers: vec![sample_peer("mac-01", PathKind::Direct)],
             shares: vec![share.clone()],
             extensions: Vec::new(),
+            extension_catalog: Vec::new(),
             error: None,
             log: vec!["linha".into()],
             pid: Some(123),
@@ -1208,6 +1233,7 @@ mod tests {
             peers: Vec::new(),
             shares: Vec::new(),
             extensions: Vec::new(),
+            extension_catalog: Vec::new(),
             error: Some("socket fora".into()),
             log: Vec::new(),
             pid: None,
@@ -1235,6 +1261,7 @@ mod tests {
             ],
             shares: vec![sample_share()],
             extensions: Vec::new(),
+            extension_catalog: Vec::new(),
             error: None,
             log: Vec::new(),
             pid: Some(77),

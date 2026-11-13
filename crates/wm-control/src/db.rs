@@ -178,6 +178,28 @@ async fn init_schema(pool: &SqlitePool) -> anyhow::Result<()> {
             updated_by TEXT,
             PRIMARY KEY (extension_id, node_id)
         )",
+        // Per-node activation state. The extension is only materialized on a
+        // node after the operator/member activates it there.
+        "CREATE TABLE IF NOT EXISTS extension_activations (
+            extension_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 1,
+            updated_at INTEGER NOT NULL,
+            updated_by TEXT,
+            PRIMARY KEY (extension_id, node_id)
+        )",
+        // Resources (shares) materialized by an extension adapter. Tracking is
+        // explicit so deactivation never deletes a user-created share with the
+        // same name.
+        "CREATE TABLE IF NOT EXISTS extension_adapter_resources (
+            extension_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            resource TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (extension_id, node_id, resource)
+        )",
         // Last status reported by each node for each extension.
         "CREATE TABLE IF NOT EXISTS extension_status (
             extension_id TEXT NOT NULL,

@@ -6,10 +6,16 @@
 //! extension needs; code-backed extensions (`cloudflared` today) also have a
 //! `ControlExtension` implementation registered by `wm-control`.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use wm_proto::{
+    ExtensionHooks, HookSpec, MeshExpose, ShareKind, ShareProtocol, validate_share_description,
+    validate_share_name,
+};
 
 pub const CLOUDFLARED_ID: &str = "cloudflared";
 pub const CLOUDFLARED_DRIVER: &str = "cloudflared";
@@ -71,10 +77,157 @@ pub struct ExtensionManifest {
     /// `generic` (JSON editor). Absent means generic.
     #[serde(default)]
     pub ui: Option<String>,
+    /// Whether the extension starts active for a freshly enrolled node. Most
+    /// node-side extensions are opt-in; creating a config/route may activate.
+    #[serde(default)]
+    pub default_active: bool,
     /// Example node config shown by the generic editor. It is documentation,
     /// not a default that is applied automatically.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub config_example: serde_json::Value,
+    /// Config materialized when the extension is activated on a node that has
+    /// no explicit config yet. Validated by the driver.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub default_config: serde_json::Value,
+    /// Lifecycle commands executed on the node.
+    #[serde(default)]
+    pub hooks: ExtensionHooks,
+    /// Declarative effects applied while the extension is active on a node.
+    #[serde(default)]
+    pub adapter: AdapterSpec,
+}
+
+/// Declarative adapter: a manifest can map a product onto mesh primitives
+/// instead of asking the operator to do it by hand.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterSpec {
+    /// Node labels merged while active. Keys are removed on deactivation when
+    /// the current value still matches the adapter value.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+    #[serde(default)]
+    pub shares: Vec<AdapterShare>,
+    #[serde(default)]
+    pub exposes: Vec<AdapterExpose>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterShare {
+    /// Share name template; `{node}` and `{extension}` are substituted.
+    pub name: String,
+    pub port: u16,
+    #[serde(default)]
+    pub kind: ShareKind,
+    #[serde(default)]
+    pub protocol: ShareProtocol,
+    #[serde(default)]
+    pub description: String,
+}
+
+impl AdapterShare {
+    pub fn rendered_name(&self, extension_id: &str, node_name: &str) -> Result<String, String> {
+        let raw = self
+            .name
+            .replace("{extension}", &slug(extension_id))
+            .replace("{node}", &slug(node_name));
+        validate_share_name(&raw)
+    }
+}
+
+/// Node names may contain `.`/`_`, which are invalid in share names. Sanitize
+/// placeholders instead of rejecting an otherwise valid node.
+fn slug(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut dash = false;
+    for ch in raw.trim().to_ascii_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "node".into()
+    } else {
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterExpose {
+    pub overlay_port: u16,
+    pub local_port: u16,
+}
+
+impl From<AdapterExpose> for MeshExpose {
+    fn from(value: AdapterExpose) -> Self {
+        Self {
+            overlay_port: value.overlay_port,
+            local_port: value.local_port,
+        }
+    }
+}
+
+impl AdapterSpec {
+    pub fn is_empty(&self) -> bool {
+        self.labels.is_empty() && self.shares.is_empty() && self.exposes.is_empty()
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.labels.len() > 32 {
+            return Err("adapter.labels: no máximo 32 labels".into());
+        }
+        for (key, value) in &self.labels {
+            if key.trim().is_empty() || key.len() > 64 || key.chars().any(char::is_control) {
+                return Err(format!("adapter.labels: chave inválida {key:?}"));
+            }
+            if value.len() > 256 || value.chars().any(char::is_control) {
+                return Err(format!("adapter.labels: valor inválido para {key}"));
+            }
+        }
+        if self.shares.len() > 16 {
+            return Err("adapter.shares: no máximo 16 shares".into());
+        }
+        let mut names = std::collections::HashSet::new();
+        for share in &self.shares {
+            if share.port == 0 {
+                return Err("adapter.shares: porta zero".into());
+            }
+            validate_share_description(&share.description)
+                .map_err(|err| format!("adapter.shares: {err}"))?;
+            if !share.name.contains("{node}") && self.shares.len() > 1 {
+                if !names.insert(share.name.clone()) {
+                    return Err(format!("adapter.shares: nome duplicado '{}'", share.name));
+                }
+            }
+            // Validate both substitutions with harmless sample values.
+            share.rendered_name("extension", "node")?;
+        }
+        if self.exposes.len() > 32 {
+            return Err("adapter.exposes: no máximo 32 portas".into());
+        }
+        let mut ports = std::collections::HashSet::new();
+        for expose in &self.exposes {
+            if expose.overlay_port == 0 || expose.local_port == 0 {
+                return Err("adapter.exposes: porta zero".into());
+            }
+            if !ports.insert(expose.overlay_port) {
+                return Err(format!(
+                    "adapter.exposes: porta de overlay {} duplicada",
+                    expose.overlay_port
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn default_version() -> String {
@@ -112,6 +265,19 @@ impl ExtensionManifest {
         if self.id == CLOUDFLARED_ID && self.node_driver != NodeDriver::Cloudflared {
             return Err("a extensão 'cloudflared' precisa usar node_driver = 'cloudflared'".into());
         }
+        validate_hook("install", self.hooks.install.as_ref())?;
+        validate_hook("activate", self.hooks.activate.as_ref())?;
+        validate_hook("deactivate", self.hooks.deactivate.as_ref())?;
+        self.adapter.validate()?;
+        if !self.default_config.is_null() {
+            if self.node_driver == NodeDriver::Exec {
+                let config: crate::ExecConfig = serde_json::from_value(self.default_config.clone())
+                    .map_err(|err| format!("default_config inválida para exec: {err}"))?;
+                config.validate()?;
+            } else if self.node_driver == NodeDriver::Cloudflared {
+                return Err("default_config não se aplica ao driver cloudflared".into());
+            }
+        }
         Ok(())
     }
 
@@ -122,6 +288,60 @@ impl ExtensionManifest {
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string_pretty(self)
     }
+}
+
+fn validate_hook(name: &str, hook: Option<&HookSpec>) -> Result<(), String> {
+    let Some(hook) = hook else {
+        return Ok(());
+    };
+    let command = hook.command.trim();
+    if command.is_empty() || command.chars().count() > 512 {
+        return Err(format!("hooks.{name}.command deve ter 1-512 caracteres"));
+    }
+    if command.chars().any(char::is_control) {
+        return Err(format!("hooks.{name}.command contém caracteres de controle"));
+    }
+    if hook.args.len() > 128 {
+        return Err(format!("hooks.{name}: no máximo 128 argumentos"));
+    }
+    for arg in &hook.args {
+        if arg.len() > 4096 || arg.contains('\0') {
+            return Err(format!("hooks.{name}: argumento inválido"));
+        }
+    }
+    if hook.env.len() > 64 {
+        return Err(format!("hooks.{name}: no máximo 64 variáveis"));
+    }
+    for (key, value) in &hook.env {
+        if !valid_env_key(key) {
+            return Err(format!("hooks.{name}: variável inválida {key:?}"));
+        }
+        if value.len() > 4096 || value.contains('\0') {
+            return Err(format!("hooks.{name}: valor inválido para {key}"));
+        }
+    }
+    if hook.timeout_secs == 0 || hook.timeout_secs > 3600 {
+        return Err(format!("hooks.{name}.timeout_secs precisa estar em 1..=3600"));
+    }
+    if let Some(dir) = &hook.working_dir {
+        if dir.is_empty() || dir.len() > 1024 || dir.chars().any(char::is_control) {
+            return Err(format!("hooks.{name}.working_dir inválido"));
+        }
+    }
+    Ok(())
+}
+
+fn valid_env_key(key: &str) -> bool {
+    let bytes = key.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    if !(bytes[0].is_ascii_alphabetic() || bytes[0] == b'_') {
+        return false;
+    }
+    bytes
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -216,35 +436,74 @@ pub fn load_dir(root: &Path) -> LoadedManifests {
     out
 }
 
-/// Writes the built-in manifests to disk. Existing files are left untouched so
+// The repository `extensions/` folder is the source of truth for bundled
+// extensions. It is embedded so a distributed binary still seeds them.
+const CLOUDFLARED_MANIFEST_TOML: &str =
+    include_str!("../../../extensions/cloudflared/extension.toml");
+const SEANCE_MANIFEST_TOML: &str = include_str!("../../../extensions/seance/extension.toml");
+const SEANCE_INSTALL_SH: &str = include_str!("../../../extensions/seance/install.sh");
+const SEANCE_ACTIVATE_SH: &str = include_str!("../../../extensions/seance/activate.sh");
+const SEANCE_DEACTIVATE_SH: &str = include_str!("../../../extensions/seance/deactivate.sh");
+const EXTENSIONS_README: &str = include_str!("../../../extensions/README.md");
+
+/// Writes bundled extensions to disk. Existing files are left untouched so
 /// operator edits survive upgrades.
 pub fn seed_builtin_manifests(root: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(root)?;
-    let dir = root.join(CLOUDFLARED_ID);
-    fs::create_dir_all(&dir)?;
-    let file = dir.join("extension.toml");
-    if !file.exists() {
-        let text = builtin_cloudflared_manifest()
-            .to_toml()
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-        fs::write(&file, text)?;
+    seed_file(root, "README.md", EXTENSIONS_README, false, false)?;
+    seed_file(root, "cloudflared/extension.toml", CLOUDFLARED_MANIFEST_TOML, false, false)?;
+    seed_file(root, "seance/extension.toml", SEANCE_MANIFEST_TOML, false, false)?;
+    // Bundled hook scripts are managed assets: refresh them on boot so an
+    // upgrade does not leave an old installer behind. Manifests are not
+    // overwritten (operators tune them), and symlinks are never followed.
+    seed_file(root, "seance/install.sh", SEANCE_INSTALL_SH, true, true)?;
+    seed_file(root, "seance/activate.sh", SEANCE_ACTIVATE_SH, true, true)?;
+    seed_file(root, "seance/deactivate.sh", SEANCE_DEACTIVATE_SH, true, true)?;
+    Ok(())
+}
+
+fn seed_file(
+    root: &Path,
+    relative: &str,
+    content: &str,
+    executable: bool,
+    overwrite: bool,
+) -> std::io::Result<()> {
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match fs::symlink_metadata(&path) {
+        Ok(meta) => {
+            if overwrite && meta.file_type().is_file() {
+                // A read-only or otherwise unwritable asset must not prevent
+                // the agent/control from booting; it will be retried next boot.
+                let _ = fs::write(&path, content);
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => fs::write(&path, content)?,
+        Err(err) => return Err(err),
+    }
+    #[cfg(unix)]
+    if executable {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::symlink_metadata(&path) {
+            if meta.file_type().is_file() {
+                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
+            }
+        }
     }
     Ok(())
 }
 
 pub fn builtin_cloudflared_manifest() -> ExtensionManifest {
-    ExtensionManifest {
-        id: CLOUDFLARED_ID.into(),
-        name: "Cloudflare Tunnel".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        description: "Expõe serviços locais de um nó pela Cloudflare, com rotas por projeto e URL pública gerenciadas pelo painel.".into(),
-        author: "wired-magic".into(),
-        homepage: Some("https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/".into()),
-        builtin: true,
-        node_driver: NodeDriver::Cloudflared,
-        ui: Some("cloudflared".into()),
-        config_example: serde_json::Value::Null,
-    }
+    let mut manifest: ExtensionManifest =
+        toml::from_str(CLOUDFLARED_MANIFEST_TOML).expect("manifesto cloudflared embutido válido");
+    manifest.builtin = true;
+    manifest
+}
+
+pub fn builtin_seance_manifest() -> ExtensionManifest {
+    toml::from_str(SEANCE_MANIFEST_TOML).expect("manifesto seance embutido válido")
 }
 
 #[cfg(test)]
@@ -287,14 +546,40 @@ command = "hello"
     fn seeds_cloudflared_manifest_once() {
         let dir = tempfile::tempdir().unwrap();
         seed_builtin_manifests(dir.path()).unwrap();
+        // Bundled hook scripts are refreshed, not left stale.
+        std::fs::write(dir.path().join("seance/install.sh"), "# old").unwrap();
         seed_builtin_manifests(dir.path()).unwrap();
+        assert_ne!(
+            std::fs::read_to_string(dir.path().join("seance/install.sh")).unwrap(),
+            "# old"
+        );
         let loaded = load_dir(dir.path());
-        assert_eq!(loaded.manifests.len(), 1);
-        let m = &loaded.manifests[0];
-        assert_eq!(m.id, CLOUDFLARED_ID);
+        assert_eq!(loaded.manifests.len(), 2);
+        let m = loaded
+            .manifests
+            .iter()
+            .find(|manifest| manifest.id == CLOUDFLARED_ID)
+            .expect("cloudflared");
         assert!(m.builtin);
+        assert!(!m.default_active);
         assert_eq!(m.node_driver, NodeDriver::Cloudflared);
         assert_eq!(m.ui_kind(), "cloudflared");
+        let seance = loaded
+            .manifests
+            .iter()
+            .find(|manifest| manifest.id == "seance")
+            .expect("seance");
+        assert_eq!(seance.node_driver, NodeDriver::Exec);
+        assert!(seance.default_config["command"].as_str().is_some());
+        assert_eq!(seance.adapter.exposes[0].overlay_port, 8421);
+        assert_eq!(
+            seance.adapter.shares[0]
+                .rendered_name("seance", "mac_01.local")
+                .unwrap(),
+            "baguette-mac-01-local"
+        );
+        assert!(seance.hooks.install.is_some());
+        assert!(dir.path().join("seance/install.sh").is_file());
     }
 
     #[test]
