@@ -308,7 +308,7 @@ cleanup() { [ -z "$TMP_DIR" ] || rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 update_tap() {
     local repo="$1"
-    local tmp existing_sha existing_file content
+    local tmp existing_sha existing_sha_raw existing_file content
     local -a args
     [[ "$repo" =~ ^[A-Za-z0-9_.-]+/homebrew-[A-Za-z0-9_.-]+$ ]] || die "tap inválido: $repo (use OWNER/homebrew-NAME)"
     gh repo view "$repo" --json name,defaultBranchRef >/dev/null 2>&1 || die "tap não encontrado ou sem acesso: $repo"
@@ -317,8 +317,13 @@ update_tap() {
 
     TMP_DIR="$(mktemp -d)"
     tmp="$TMP_DIR"
-    existing_sha="$(gh api "repos/$repo/contents/Formula/wired-magic.rb?ref=$TAP_BRANCH" --jq .sha 2>/dev/null || true)"
+    existing_sha=""
     existing_file=""
+    # `gh api` prints the error body even on 404; only trust stdout when the
+    # request itself succeeded, otherwise a missing formula looks present.
+    if existing_sha_raw="$(gh api "repos/$repo/contents/Formula/wired-magic.rb?ref=$TAP_BRANCH" --jq .sha 2>/dev/null)"; then
+        existing_sha="$existing_sha_raw"
+    fi
     if [ -n "$existing_sha" ]; then
         gh api "repos/$repo/contents/Formula/wired-magic.rb?ref=$TAP_BRANCH" --jq .content | base64_decode > "$tmp/existing.rb"
         existing_file="$tmp/existing.rb"
