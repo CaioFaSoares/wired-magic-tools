@@ -94,9 +94,16 @@ O aplicativo inicia a checagem em uma thread após inicializar a tela: `brew upd
 consulta JSON da fórmula e, havendo versão SemVer estável superior, executa
 `brew upgrade <tap>/wired-magic`. As notificações informam a checagem, o download e a
 instalação; não há modal bloqueante. Entrada fechada, saída isolada do terminal e
-limites de tempo (120 s para metadados, 30 s para consulta e 600 s para instalação)
+limites de tempo (60 s para o update, 30 s para consulta e 600 s para instalação)
 mantêm a sessão utilizável em caso de falha. Uma trava por instalação evita duas TUIs
 atualizando ao mesmo tempo. `brew pin` é respeitado.
+
+Antes de chamar o Homebrew, a TUI reconcilia locks órfãos em
+`/opt/homebrew/var/homebrew/locks` (remove apenas arquivos cujo `flock` está livre,
+como o `brew cleanup`) e, se houver um processo Homebrew ativo, adia a checagem para
+a próxima abertura em vez de esperar pelo lock e travar um `brew install` concorrente.
+Depois de cada tentativa ela repete a reconciliação; locks ainda mantidos por outro
+processo são preservados.
 
 O binário atualizado vale para a próxima abertura. A TUI atual, o agente já ativo e os
 serviços não são reiniciados: atualizar o pacote **não** atualiza processos em memória.

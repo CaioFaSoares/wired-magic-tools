@@ -2,6 +2,8 @@
 use crate::{Msg, app::Level};
 use anyhow::{Context, bail};
 use serde_json::Value;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
 use std::{
     fs::{self, File, OpenOptions},
@@ -75,6 +77,65 @@ fn newer(candidate: &str, current: &str) -> bool {
     }
 }
 
+fn lock_files(locks: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(locks) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file()))
+        .collect()
+}
+
+/// Open without following symlinks and try to take Homebrew's exclusive lock.
+fn try_lock(path: &Path) -> Option<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .ok()?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        Some(file)
+    } else {
+        None
+    }
+}
+
+fn same_inode(path: &Path, file: &File) -> bool {
+    let Ok(path_meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    let Ok(file_meta) = file.metadata() else {
+        return false;
+    };
+    path_meta.dev() == file_meta.dev() && path_meta.ino() == file_meta.ino()
+}
+
+/// Remove lock files no live process holds, matching `brew cleanup`'s logic.
+/// This repairs leftovers from an interrupted `brew` or Homebrew update.
+fn reconcile_locks(locks: &Path) -> usize {
+    let mut removed = 0;
+    for path in lock_files(locks) {
+        let Some(file) = try_lock(&path) else {
+            continue;
+        };
+        if same_inode(&path, &file) && fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// A Homebrew command is currently running. Waiting on its blocking locks would
+/// make `brew install` and this background check stall each other.
+fn held_lock(locks: &Path) -> Option<PathBuf> {
+    lock_files(locks)
+        .into_iter()
+        .find(|path| try_lock(path).is_none())
+}
+
 fn update(tx: &Sender<Msg>) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?.canonicalize()?;
     let Some((prefix, keg)) = installation(&exe) else {
@@ -95,6 +156,28 @@ fn update(tx: &Sender<Msg>) -> anyhow::Result<()> {
     let brew = prefix.join("bin/brew");
     let locks = prefix.join("var/homebrew/locks");
     fs::create_dir_all(&locks)?;
+    let removed = reconcile_locks(&locks);
+    if removed > 0 {
+        notify(
+            tx,
+            Level::Info,
+            format!("Reconciliei {removed} lock(s) órfão(s) do Homebrew."),
+        );
+    }
+    if let Some(busy) = held_lock(&locks) {
+        let name = busy
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "lock".into());
+        notify(
+            tx,
+            Level::Info,
+            format!(
+                "Homebrew está em uso ({name}); atualização automática adiada para a próxima abertura."
+            ),
+        );
+        return Ok(());
+    }
     // Keep the lock inode: unlinking after unlock would race other TUI sessions.
     let lock = OpenOptions::new()
         .read(true)
@@ -104,7 +187,6 @@ fn update(tx: &Sender<Msg>) -> anyhow::Result<()> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(locks.join("wired-magic-tui-update.lock"))?;
-    use std::os::fd::AsRawFd;
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Ok(());
     }
@@ -113,82 +195,91 @@ fn update(tx: &Sender<Msg>) -> anyhow::Result<()> {
         Level::Info,
         "Verificando atualizações Homebrew em segundo plano…",
     );
-    run(&brew, &["update"], Duration::from_secs(120))?;
-    let info: Value = serde_json::from_slice(&run(
-        &brew,
-        &["info", "--json=v2", &formula],
-        Duration::from_secs(30),
-    )?)?;
-    let entry = info
-        .pointer("/formulae/0")
-        .context("formula não encontrada")?;
-    let full_name = entry
-        .get("full_name")
-        .and_then(Value::as_str)
-        .context("formula sem full_name")?;
-    if !full_name.eq_ignore_ascii_case(&formula) {
-        bail!("origem da fórmula não confere");
-    }
-    let latest = entry
-        .pointer("/versions/stable")
-        .and_then(Value::as_str)
-        .context("versão estável ausente")?;
-    if !newer(latest, env!("CARGO_PKG_VERSION")) {
-        return Ok(());
-    }
-    if entry.get("pinned").and_then(Value::as_bool) == Some(true) {
+    // Keep the lock is shared only with our own updater, but Homebrew's
+    // blocking locks must be given a bounded life so a user's `brew install`
+    // does not wait forever behind this background check.
+    let outcome = (|| -> anyhow::Result<()> {
+        run(&brew, &["update"], Duration::from_secs(60))?;
+        let info: Value = serde_json::from_slice(&run(
+            &brew,
+            &["info", "--json=v2", &formula],
+            Duration::from_secs(30),
+        )?)?;
+        let entry = info
+            .pointer("/formulae/0")
+            .context("formula não encontrada")?;
+        let full_name = entry
+            .get("full_name")
+            .and_then(Value::as_str)
+            .context("formula sem full_name")?;
+        if !full_name.eq_ignore_ascii_case(&formula) {
+            bail!("origem da fórmula não confere");
+        }
+        let latest = entry
+            .pointer("/versions/stable")
+            .and_then(Value::as_str)
+            .context("versão estável ausente")?;
+        if !newer(latest, env!("CARGO_PKG_VERSION")) {
+            return Ok(());
+        }
+        if entry.get("pinned").and_then(Value::as_bool) == Some(true) {
+            notify(
+                tx,
+                Level::Warn,
+                format!(
+                    "Versão {latest} disponível; fórmula fixada (brew pin). Atualização automática respeitou o pin."
+                ),
+            );
+            return Ok(());
+        }
+        // An earlier session may already have installed the latest keg.
+        let already_installed = entry
+            .get("installed")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.get("version").and_then(Value::as_str) == Some(latest))
+            });
+        if !already_installed {
+            notify(
+                tx,
+                Level::Info,
+                format!(
+                    "Nova versão {latest}: baixando e atualizando via Homebrew sem interromper esta sessão…"
+                ),
+            );
+            run(&brew, &["upgrade", &formula], Duration::from_secs(600))?;
+        }
+        let installed: Value = serde_json::from_slice(&run(
+            &brew,
+            &["info", "--json=v2", &formula],
+            Duration::from_secs(30),
+        )?)?;
+        if !installed
+            .pointer("/formulae/0/installed")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.get("version").and_then(Value::as_str) == Some(latest))
+            })
+        {
+            bail!("Homebrew não confirmou a instalação de {latest}");
+        }
         notify(
             tx,
-            Level::Warn,
+            Level::Good,
             format!(
-                "Versão {latest} disponível; fórmula fixada (brew pin). Atualização automática respeitou o pin."
+                "Versão {latest} instalada! Será usada na próxima abertura. TUI e agente atuais continuam ativos; nenhum reinício foi forçado."
             ),
         );
-        return Ok(());
-    }
-    // An earlier session may already have installed the latest keg.
-    let already_installed = entry
-        .get("installed")
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| item.get("version").and_then(Value::as_str) == Some(latest))
-        });
-    if !already_installed {
-        notify(
-            tx,
-            Level::Info,
-            format!(
-                "Nova versão {latest}: baixando e atualizando via Homebrew sem interromper esta sessão…"
-            ),
-        );
-        run(&brew, &["upgrade", &formula], Duration::from_secs(600))?;
-    }
-    let installed: Value = serde_json::from_slice(&run(
-        &brew,
-        &["info", "--json=v2", &formula],
-        Duration::from_secs(30),
-    )?)?;
-    if !installed
-        .pointer("/formulae/0/installed")
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| item.get("version").and_then(Value::as_str) == Some(latest))
-        })
-    {
-        bail!("Homebrew não confirmou a instalação de {latest}");
-    }
-    notify(
-        tx,
-        Level::Good,
-        format!(
-            "Versão {latest} instalada! Será usada na próxima abertura. TUI e agente atuais continuam ativos; nenhum reinício foi forçado."
-        ),
-    );
-    Ok(())
+        Ok(())
+    })();
+    // Clean up files left by this run (or by an interrupted one) as soon as the
+    // brew child is gone; locks still held by another process are preserved.
+    let _ = reconcile_locks(&locks);
+    outcome
 }
 
 /// No inherited terminal, shell, password prompts or unbounded pipe buffers.
@@ -301,6 +392,55 @@ mod tests {
         .unwrap();
         assert_eq!(output, b"1:1");
     }
+    fn temp_locks(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wm-updater-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reconciles_stale_locks_and_defers_to_active_ones() {
+        let dir = temp_locks("locks");
+        let stale = dir.join("stale.incomplete.download.lock");
+        fs::write(&stale, b"").unwrap();
+        let active_path = dir.join("active.formula.lock");
+        let active = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&active_path)
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(active.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+
+        assert_eq!(held_lock(&dir), Some(active_path.clone()));
+        assert_eq!(reconcile_locks(&dir), 1);
+        assert!(!stale.exists());
+        assert!(active_path.exists());
+
+        assert_eq!(unsafe { libc::flock(active.as_raw_fd(), libc::LOCK_UN) }, 0);
+        drop(active);
+        assert_eq!(held_lock(&dir), None);
+        assert_eq!(reconcile_locks(&dir), 1);
+        assert!(!active_path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_or_empty_lock_directory_is_not_busy() {
+        let dir = temp_locks("empty");
+        assert_eq!(held_lock(&dir), None);
+        assert_eq!(reconcile_locks(&dir), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn validates_receipt_origin() {
         assert_eq!(
