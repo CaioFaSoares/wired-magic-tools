@@ -36,6 +36,11 @@ def render(repository, tag, assets, archs=ARCHS):
         arch_dep = "  depends_on arch: :arm64\n"
     elif archs == ("x86_64",):
         arch_dep = "  depends_on arch: :x86_64\n"
+    # Homebrew validates taps for Linux too, where the on_macos block is not
+    # evaluated. A default spec keeps the formula readable there; depends_on
+    # :macos still prevents Linux installation.
+    primary = "arm64" if "arm64" in hashes else "x86_64"
+    primary_url = f"{base}/releases/download/{tag}/wired-magic-{tag}-darwin-{primary}.tar.gz"
     blocks = []
     if "arm64" in hashes:
         blocks.append(f'''    on_arm do
@@ -56,9 +61,12 @@ class WiredMagic < Formula
   version "{tag[1:]}"
   license "MIT"
 
-  depends_on macos: :sonoma
+  url "{primary_url}"
+  sha256 "{hashes[primary]}"
+  depends_on :macos
 {arch_dep}
   on_macos do
+    depends_on macos: :sonoma
 {"".join(blocks)}  end
 
   def install
