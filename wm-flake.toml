@@ -9,7 +9,7 @@
 # O lockfile registra URL, ref, commit e subdiretório para updates reproduzíveis.
 [flake]
 name = "wired-magic-tools"
-version = "0.1.3"
+version = "0.1.4"
 description = "Extensões oficiais do wired-magic: chat TUI/GUI, debug TUI/GUI e cloudflared."
 
 [[package]]
