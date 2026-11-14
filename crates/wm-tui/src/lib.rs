@@ -745,6 +745,7 @@ fn handle_mouse(app: &mut App, event: MouseEvent, tx: &Sender<Msg>) {
                             | MouseAction::SelectShare(_)
                             | MouseAction::SelectJob(_)
                             | MouseAction::SelectExtension(_)
+                            | MouseAction::SelectCatalog(_)
                     ) {
                         execute_mouse(app, action, tx);
                     }
@@ -809,6 +810,7 @@ fn mouse_click(app: &mut App, column: u16, row: u16, tx: &Sender<Msg>) {
             | MouseAction::SelectShare(_)
             | MouseAction::SelectJob(_)
             | MouseAction::SelectExtension(_)
+            | MouseAction::SelectCatalog(_)
     );
     execute_mouse(app, action, tx);
     if double && row_action {
@@ -846,16 +848,46 @@ fn mouse_scroll(app: &mut App, up: bool, column: u16, row: u16) {
     }
 }
 
+fn toggle_selected_extension(app: &mut App, tx: &Sender<Msg>) {
+    if app.catalog_focus {
+        if let Some(entry) = app.selected_catalog().cloned() {
+            // 1. Extensões com aba TUI abrem a aba (chat/debug etc.).
+            if let Some(index) = app.extension_tabs.iter().position(|tab| tab.id == entry.id) {
+                app.tab = crate::app::TABS.len() + index;
+                app.delete_armed = None;
+                return;
+            }
+            // 2. Se o control já conhece a extensão, ativa/desativa o nó.
+            if let Some(view) = app
+                .extension_catalog
+                .iter()
+                .find(|view| view.id == entry.id)
+                .cloned()
+            {
+                actions::toggle_extension(app, &view, tx);
+                return;
+            }
+            app.notify(
+                Level::Warn,
+                format!(
+                    "'{}' está no catálogo local, mas não no do control; recarregue os manifestos no painel ou use wm extensions enable",
+                    entry.id
+                ),
+            );
+            return;
+        }
+    }
+    if let Some(view) = app.selected_extension().cloned() {
+        actions::toggle_extension(app, &view, tx);
+    }
+}
+
 fn activate_selection(app: &mut App, tx: &Sender<Msg>) {
     match app.tab {
         TAB_PEERS => actions::open_probe_form(app),
         TAB_SHARES => actions::open_share(app),
         TAB_SERVICES => actions::view_job_log(app),
-        TAB_EXTENSIONS => {
-            if let Some(view) = app.selected_extension().cloned() {
-                actions::toggle_extension(app, &view, tx);
-            }
-        }
+        TAB_EXTENSIONS => toggle_selected_extension(app, tx),
         _ => {}
     }
 }
@@ -904,14 +936,19 @@ fn execute_mouse(app: &mut App, action: MouseAction, tx: &Sender<Msg>) {
         }
         A::SelectExtension(index) if index < app.extension_catalog.len() => {
             app.extensions_table.select(Some(index));
+            app.catalog_focus = false;
         }
-        A::ToggleExtension => {
-            if let Some(view) = app.selected_extension().cloned() {
-                actions::toggle_extension(app, &view, tx);
-            }
+        A::SelectCatalog(index) if index < app.local_catalog.len() => {
+            app.catalog_table.select(Some(index));
+            app.catalog_focus = true;
         }
+        A::ToggleExtension => toggle_selected_extension(app, tx),
         A::OpenExtensionsPanel => actions::open_extensions_panel(app),
-        A::SelectPeer(_) | A::SelectShare(_) | A::SelectJob(_) | A::SelectExtension(_) => {}
+        A::SelectPeer(_)
+        | A::SelectShare(_)
+        | A::SelectJob(_)
+        | A::SelectExtension(_)
+        | A::SelectCatalog(_) => {}
         A::OpenMenu => open_menu(app),
         A::MenuSelect(_) => {}
         A::MenuClose => app.menu = None,
@@ -1087,11 +1124,7 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             TAB_SHARES => actions::open_share(app),
             TAB_PEERS => actions::open_probe_form(app),
             TAB_SERVICES => actions::view_job_log(app),
-            TAB_EXTENSIONS => {
-                if let Some(view) = app.selected_extension().cloned() {
-                    actions::toggle_extension(app, &view, tx);
-                }
-            }
+            TAB_EXTENSIONS => toggle_selected_extension(app, tx),
             _ => {
                 if let Some(tab) = app.selected_extension_tab() {
                     if tab.spec.mode == TuiMode::Exec {
@@ -1152,6 +1185,18 @@ fn handle_tab_action(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             _ => {}
         },
         TAB_EXTENSIONS => match key.code {
+            KeyCode::Char('h') => {
+                app.catalog_focus = false;
+                if app.extensions_table.selected().is_none() && !app.extension_catalog.is_empty() {
+                    app.extensions_table.select(Some(0));
+                }
+            }
+            KeyCode::Char('l') => {
+                app.catalog_focus = true;
+                if app.catalog_table.selected().is_none() && !app.local_catalog.is_empty() {
+                    app.catalog_table.select(Some(0));
+                }
+            }
             KeyCode::Char('t') | KeyCode::Char(' ') => {
                 if let Some(view) = app.selected_extension().cloned() {
                     actions::toggle_extension(app, &view, tx);
@@ -1226,7 +1271,11 @@ fn navigate(app: &mut App, down: bool) {
             app.delete_armed = None;
         }
         TAB_EXTENSIONS => {
-            select(&mut app.extensions_table, app.extension_catalog.len(), down, 1);
+            if app.catalog_focus && !app.local_catalog.is_empty() {
+                select(&mut app.catalog_table, app.local_catalog.len(), down, 1);
+            } else {
+                select(&mut app.extensions_table, app.extension_catalog.len(), down, 1);
+            }
         }
         TAB_SERVICES => select(&mut app.jobs_table, app.jobs.len(), down, 1),
         TAB_CONSOLE => app.scroll_console(if down { -1 } else { 1 }),
@@ -1249,7 +1298,11 @@ fn navigate_by(app: &mut App, delta: isize) {
             app.delete_armed = None;
         }
         TAB_EXTENSIONS => {
-            select_step(&mut app.extensions_table, app.extension_catalog.len(), delta);
+            if app.catalog_focus && !app.local_catalog.is_empty() {
+                select_step(&mut app.catalog_table, app.local_catalog.len(), delta);
+            } else {
+                select_step(&mut app.extensions_table, app.extension_catalog.len(), delta);
+            }
         }
         TAB_SERVICES => select_step(&mut app.jobs_table, app.jobs.len(), delta),
         TAB_CONSOLE => app.scroll_console(-delta),
@@ -2338,6 +2391,27 @@ mod tests {
         assert_eq!(app.console_scroll, 1);
         press(&mut app, KeyCode::End, &tx);
         assert_eq!(app.console_scroll, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_catalog_chat_row_opens_its_tui_tab() {
+        let root = temp_root("catalog-open");
+        let mut app = App::load(root.clone());
+        app.local_catalog = crate::catalog::scan(&root).entries;
+        app.rebuild_extension_tabs();
+        let index = app
+            .local_catalog
+            .iter()
+            .position(|entry| entry.id == "chat")
+            .expect("chat embutida");
+        app.catalog_table.select(Some(index));
+        app.catalog_focus = true;
+        app.tab = TAB_EXTENSIONS;
+        let (tx, _rx) = sender();
+        toggle_selected_extension(&mut app, &tx);
+        assert!(app.tab >= crate::app::TABS.len());
+        assert_eq!(app.selected_extension_tab().unwrap().id, "chat");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

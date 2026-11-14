@@ -1,4 +1,4 @@
-# Debug (TUI)
+# Debug público (TUI)
 
 O debug padrão é a TUI local embutida no `wm`; não depende de sidecar, porta ou
 servidor. Ela mostra CPU, memória, load, o processo `wm`, top processos e um

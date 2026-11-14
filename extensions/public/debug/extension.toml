@@ -8,7 +8,7 @@
 # O painel web equivalente é a extensão `debug_gui`. Esta extensão não tem
 # sidecar: o manifesto documenta o pacote TUI no catálogo.
 id = "debug"
-name = "Debug (TUI)"
+name = "Debug público (TUI)"
 version = "0.1.0"
 description = "Dashboard de performance no terminal: CPU, memória, load, processo wm, top processos e descoberta de extensões locais."
 author = "wired-magic"

@@ -8,7 +8,7 @@
 # usada pelo painel web. Esta extensão não tem sidecar: o manifesto documenta o
 # pacote TUI no catálogo e o gerenciador de pacotes pode distribuí-lo.
 id = "chat"
-name = "Chat (TUI)"
+name = "Chat público (TUI)"
 version = "0.1.0"
 description = "Cliente de chat no terminal; conecta em um servidor chat_gui pela malha, usando uma única porta HTTP."
 author = "wired-magic"

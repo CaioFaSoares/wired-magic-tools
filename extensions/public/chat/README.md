@@ -1,4 +1,4 @@
-# Chat (TUI)
+# Chat público (TUI)
 
 O chat padrão é a TUI embutida no `wm`. Ela fala com o servidor `chat_gui`
 pela mesma porta HTTP usada pelo painel web, então funciona em qualquer nó que

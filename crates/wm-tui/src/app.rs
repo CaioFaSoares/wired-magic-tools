@@ -15,12 +15,14 @@ use wm_proto::{
 };
 
 use crate::agent;
+use crate::profiles;
 use crate::persist::{
     self, AgentSettings, EnrolledNode, NoticeRecord, PersistedJob, PersistedState, SnapshotCache,
 };
 
-pub const TABS: [&str; 9] = [
+pub const TABS: [&str; 10] = [
     "Início",
+    "Redes",
     "Peers",
     "Shares",
     "Mapa",
@@ -31,14 +33,15 @@ pub const TABS: [&str; 9] = [
     "Ajuda",
 ];
 pub const TAB_STATUS: usize = 0;
-pub const TAB_PEERS: usize = 1;
-pub const TAB_SHARES: usize = 2;
-pub const TAB_TOPOLOGY: usize = 3;
-pub const TAB_AGENT: usize = 4;
-pub const TAB_EXTENSIONS: usize = 5;
-pub const TAB_SERVICES: usize = 6;
-pub const TAB_CONSOLE: usize = 7;
-pub const TAB_HELP: usize = 8;
+pub const TAB_NETWORKS: usize = 1;
+pub const TAB_PEERS: usize = 2;
+pub const TAB_SHARES: usize = 3;
+pub const TAB_TOPOLOGY: usize = 4;
+pub const TAB_AGENT: usize = 5;
+pub const TAB_EXTENSIONS: usize = 6;
+pub const TAB_SERVICES: usize = 7;
+pub const TAB_CONSOLE: usize = 8;
+pub const TAB_HELP: usize = 9;
 
 /// One dynamic tab contributed by an extension's `[tui]` manifest section.
 #[derive(Debug, Clone)]
@@ -116,6 +119,7 @@ pub enum MouseAction {
     SelectShare(usize),
     SelectJob(usize),
     SelectExtension(usize),
+    SelectCatalog(usize),
     ToggleExtension,
     OpenExtensionsPanel,
     OpenMenu,
@@ -143,6 +147,13 @@ pub enum MouseAction {
     Reconnect,
     CopyPeer,
     RenameNode,
+    Profile,
+    NewProfile,
+    RenameProfile,
+    SwitchProfile,
+    StartProfile,
+    StopProfile,
+    RemoveProfile,
     OpenGui,
     CloseGui,
     AdminPanel,
@@ -343,6 +354,12 @@ pub enum FormAction {
     RenameNode,
     AgentSettings,
     ProbePort,
+    /// Edits the presentation identity of the active enrollment.
+    Profile,
+    /// Creates a new local profile directory and switches to it.
+    NewProfile,
+    /// Renames the local label of a profile.
+    RenameProfile(String),
 }
 
 #[derive(Debug)]
@@ -445,7 +462,18 @@ fn truncate_text(text: &str, limit: usize) -> String {
 }
 
 pub struct App {
+    /// Data directory of the active profile.
     pub root: PathBuf,
+    /// Root that owns `profiles.json` and the `profiles/` directory.
+    pub registry_root: PathBuf,
+    pub profiles: profiles::Registry,
+    pub profile_status: Vec<profiles::ProfileStatus>,
+    pub active_profile: String,
+    /// Selection in the "Redes" tab.
+    pub profiles_table: TableState,
+    /// Set when the user asks to switch/enroll another profile; the session
+    /// loop tears down this view and reopens on the new root.
+    pub pending_switch: Option<String>,
     pub exe: PathBuf,
     pub socket: PathBuf,
     pub log_path: PathBuf,
@@ -473,6 +501,10 @@ pub struct App {
     pub shares_table: TableState,
     pub jobs_table: TableState,
     pub extensions_table: TableState,
+    /// Seleção do catálogo local (aba Extensões).
+    pub catalog_table: TableState,
+    /// `true` quando o foco de teclado está no catálogo local.
+    pub catalog_focus: bool,
     pub jobs: Vec<Job>,
     pub agent: AgentView,
     pub settings: AgentSettings,
@@ -582,6 +614,28 @@ impl App {
         }
     }
 
+    fn ensure_catalog_selection(&mut self) {
+        if !self.extension_catalog.is_empty()
+            && self
+                .extensions_table
+                .selected()
+                .is_none_or(|index| index >= self.extension_catalog.len())
+        {
+            self.extensions_table.select(Some(0));
+        }
+        if !self.local_catalog.is_empty()
+            && self
+                .catalog_table
+                .selected()
+                .is_none_or(|index| index >= self.local_catalog.len())
+        {
+            self.catalog_table.select(Some(0));
+        }
+        if self.extension_catalog.is_empty() && !self.local_catalog.is_empty() {
+            self.catalog_focus = true;
+        }
+    }
+
     /// Runs a `mode = "snapshot"` tab command and stores its JSON document.
     pub fn load_extension_tab(&mut self, index: usize) {
         let Some(extension_index) = index_of_extension_tab(index) else {
@@ -670,8 +724,15 @@ impl App {
         let peer_index = state.peer_index;
         let share_index = state.share_index;
 
+        let root_for_registry = root.clone();
         let mut app = Self {
             root,
+            registry_root: root_for_registry.clone(),
+            profiles: profiles::Registry::default(),
+            profile_status: Vec::new(),
+            active_profile: profiles::LEGACY_SLUG.to_string(),
+            profiles_table: TableState::default(),
+            pending_switch: None,
             exe,
             socket: socket.clone(),
             log_path,
@@ -695,6 +756,8 @@ impl App {
             shares_table: TableState::default(),
             jobs_table: TableState::default(),
             extensions_table: TableState::default(),
+            catalog_table: TableState::default(),
+            catalog_focus: false,
             jobs: Vec::new(),
             agent: AgentView::default(),
             settings: state.settings.clone(),
@@ -844,6 +907,12 @@ impl App {
         self.jobs_table
             .selected()
             .and_then(|index| self.jobs.get(index))
+    }
+
+    pub fn selected_catalog(&self) -> Option<&crate::catalog::Entry> {
+        self.catalog_table
+            .selected()
+            .and_then(|index| self.local_catalog.get(index))
     }
 
     pub fn selected_extension(&self) -> Option<&NodeExtensionView> {
@@ -1044,6 +1113,7 @@ impl App {
             self.extensions = snapshot.extensions;
             self.extension_catalog = snapshot.extension_catalog;
             self.rebuild_extension_tabs();
+            self.ensure_catalog_selection();
             self.cached_at = Some(Utc::now());
             self.live = true;
             if self.agent.starting.is_some() {
@@ -1052,6 +1122,7 @@ impl App {
         } else {
             self.live = false;
             self.rebuild_extension_tabs();
+            self.ensure_catalog_selection();
         }
         if !snapshot.log.is_empty() {
             self.agent.log = snapshot
@@ -1226,10 +1297,65 @@ pub fn join_form() -> Form {
                 "ex.: https://mesh.exemplo.com; use com o token",
             ),
             Field::text("token wmj_", "", 400, "convite manual; não é gravado em disco"),
-            Field::text("nome deste nó", "", 63, "opcional; padrão é o hostname"),
+            Field::text("nome deste nó", "", 63, "opcional; identidade técnica usada pela ACL"),
+            Field::text(
+                "como você aparece",
+                "",
+                64,
+                "opcional; nome de exibição para os outros membros (dá para editar depois)",
+            ),
         ],
     )
     .with_note("a inscrição é gravada em agent-state.json; o agente inicia em seguida")
+}
+
+/// Edits the presentation identity of the active profile. The technical node
+/// name is intentionally not editable here (use `n` on Peers/Início).
+pub fn profile_form(display_name: &str, about: &str) -> Form {
+    Form::new(
+        "Meu perfil",
+        FormAction::Profile,
+        vec![
+            Field::text(
+                "como você aparece",
+                display_name,
+                64,
+                "vazio usa o nome técnico do nó no que os outros veem",
+            ),
+            Field::text(
+                "descrição curta",
+                about,
+                160,
+                "opcional, ex.: 'rack da sala' ou 'Maria (trabalho)'",
+            ),
+        ],
+    )
+    .with_note("isto não muda o nome técnico nem as regras de ACL")
+}
+
+pub fn new_profile_form() -> Form {
+    Form::new(
+        "Nova rede local",
+        FormAction::NewProfile,
+        vec![
+            Field::text("nome para você", "", 40, "ex.: Amigos, Servidor técnico"),
+            Field::text(
+                "identificador",
+                "",
+                32,
+                "vazio deriva do nome; use letras, números e '-'",
+            ),
+        ],
+    )
+    .with_note("cria um data-dir isolado; a inscrição no convite vem em seguida")
+}
+
+pub fn rename_profile_form(current: &str) -> Form {
+    Form::new(
+        "Renomear rede local",
+        FormAction::RenameProfile(String::new()),
+        vec![Field::text("nome para você", current, 40, "só muda o rótulo local")],
+    )
 }
 
 pub fn new_share_form() -> Form {

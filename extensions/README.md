@@ -152,8 +152,9 @@ ferramenta de mantenedor, não um sidecar e não é semeada no data dir. Use
    ```sh
    wm packages install github:owner/repo --package minha_ext --yes
    ```
-3. **Ative** o componente de nó na TUI (aba Extensões, `Enter/t`), no painel ou
-   com `wm extensions enable <id>`.
+3. **Ative** o componente de nó na TUI (aba Extensões, `h`/`l` alterna o
+   catálogo do control e o local, `Enter/t` ativa ou abre a aba TUI), no painel
+   ou com `wm extensions enable <id>`.
 4. O catálogo local da TUI relê `<data_dir>/extensions` a cada 5s; o catálogo do
    control só muda depois de **Recarregar manifestos** no painel.
 

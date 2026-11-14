@@ -284,10 +284,16 @@ fn action_bar_specs(app: &App) -> Vec<ButtonSpec> {
         }
         TAB_EXTENSIONS => {
             if let Some(view) = app.selected_extension() {
-                specs.push(button(
-                    if view.active { "Desativar" } else { "Ativar" },
-                    MouseAction::ToggleExtension,
-                ));
+                if app.catalog_focus {
+                    specs.push(button("Ativar/Abrir", MouseAction::ToggleExtension));
+                } else {
+                    specs.push(button(
+                        if view.active { "Desativar" } else { "Ativar" },
+                        MouseAction::ToggleExtension,
+                    ));
+                }
+            } else if app.selected_catalog().is_some() {
+                specs.push(button("Ativar/Abrir", MouseAction::ToggleExtension));
             }
             specs.push(button("Painel", MouseAction::OpenExtensionsPanel));
             specs.push(button("GUI local", MouseAction::OpenGui));
@@ -1105,12 +1111,12 @@ fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::from(vec![
             Span::styled("● ", Style::default().fg(Color::Green)),
             Span::raw("catálogo do control via agente · "),
-            Span::styled("Enter/t ativa ou desativa no nó", Style::default().fg(Color::Cyan)),
+            Span::styled("h/l alterna catálogo · Enter/t ativa/abre", Style::default().fg(Color::Cyan)),
             Span::raw(" · catálogo local abaixo · p painel · g GUI local"),
         ])
     } else {
         Line::from(Span::styled(
-            "sem agente: catálogo local abaixo; ative o agente para o catálogo do control",
+            "sem agente: use h/l e Enter/t no catálogo local; ative o agente para o control",
             Style::default().fg(Color::Yellow),
         ))
     };
@@ -1205,8 +1211,9 @@ fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
     .row_highlight_style(Style::default().bg(HIGHLIGHT).add_modifier(Modifier::BOLD))
     .highlight_symbol("▸ ")
     .block(block(format!(
-        " Catálogo de extensões ({}) ",
-        app.extension_catalog.len()
+        " Catálogo do control ({}){} ",
+        app.extension_catalog.len(),
+        if app.catalog_focus { "" } else { " · foco" }
     )));
     frame.render_stateful_widget(table, chunks[1], &mut app.extensions_table);
     let offset = app.extensions_table.offset();
@@ -1234,7 +1241,7 @@ fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
     draw_local_catalog(frame, chunks[2], app);
 }
 
-fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &mut App) {
     let header = Row::new(vec!["Extensão", "Versão", "Visib", "Driver", "Status", "Caminho"])
         .style(
             Style::default()
@@ -1271,10 +1278,15 @@ fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let title = match &app.catalog_error {
-        Some(err) => format!(" Catálogo local (aviso: {}) ", truncate(err, 60)),
+        Some(err) => format!(
+            " Catálogo local (aviso: {}){} ",
+            truncate(err, 60),
+            if app.catalog_focus { " · foco" } else { "" }
+        ),
         None => format!(
-            " Catálogo local ({} em <data_dir>/extensions) ",
-            app.local_catalog.len()
+            " Catálogo local ({} em <data_dir>/extensions){} ",
+            app.local_catalog.len(),
+            if app.catalog_focus { " · foco" } else { "" }
         ),
     };
     let table = Table::new(
@@ -1289,8 +1301,13 @@ fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &App) {
         ],
     )
     .header(header)
+    .row_highlight_style(Style::default().bg(HIGHLIGHT).add_modifier(Modifier::BOLD))
+    .highlight_symbol("▸ ")
     .block(block(title));
-    frame.render_widget(table, area);
+    frame.render_stateful_widget(table, area, &mut app.catalog_table);
+    let offset = app.catalog_table.offset();
+    let total = app.local_catalog.len();
+    register_table_rows(app, area, offset, total, MouseAction::SelectCatalog);
 
     if app.local_catalog.is_empty() {
         empty_message(
@@ -1574,7 +1591,8 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("  Enter/t ativa ou desativa a extensão selecionada neste nó"),
+        Line::from("  h/l alterna entre catálogo do control e local"),
+        Line::from("  Enter/t ativa/desativa no nó ou abre a aba TUI da extensão"),
         Line::from("  cloudflared: ative e configure rotas no painel (/extensions)"),
         Line::from("  seance: ativar roda install/activate, expõe 8421 e publica o share"),
         Line::from("  p abre o painel de extensões · g abre a GUI local do nó"),
@@ -1729,7 +1747,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         TAB_SHARES => " n publicar · Enter abrir · c copiar · r renomear · e on/off · d remover",
         TAB_TOPOLOGY => " Tab abas · ? ajuda · q sair (agente continua)",
         TAB_AGENT => " s iniciar · X parar · R reiniciar · e ajustes · l log · i serviço",
-        TAB_EXTENSIONS => " Enter/t ativar · catálogo local abaixo · p painel · g GUI · j/k · ? ajuda",
+        TAB_EXTENSIONS => " h control · l local · j/k · Enter/t ativar/abrir · p painel · g GUI · ? ajuda",
         TAB_SERVICES => " Enter log · g/G GUI · p painel · x para job · i/u serviço · t status",
         TAB_CONSOLE => " : comando · j/k rolar · PgUp/PgDn · Home/End · c limpar",
         TAB_HELP => " j/k rolar · :comando · q sair (agente continua)",
@@ -2641,6 +2659,20 @@ mod tests {
         app.tab = crate::app::TABS.len() + 1;
         let text = render(&mut app, 110, 30);
         assert!(text.contains("Painel"));
+        std::fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn local_catalog_is_selectable_and_shows_focus() {
+        let mut app = demo_app("local-catalog-select");
+        app.tab = TAB_EXTENSIONS;
+        app.local_catalog = crate::catalog::scan(&app.root).entries;
+        app.catalog_focus = true;
+        app.catalog_table.select(Some(0));
+        let text = render(&mut app, 120, 36);
+        assert!(text.contains("Catálogo local"));
+        assert!(text.contains("· foco"));
+        assert!(text.contains("Chat público (TUI)"));
         std::fs::remove_dir_all(&app.root).unwrap();
     }
 
