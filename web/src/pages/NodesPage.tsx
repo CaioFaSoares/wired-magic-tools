@@ -34,7 +34,7 @@ import {
   summarizePaths,
 } from "../lib/nodes";
 import { invalidateNodeQueries, useNodes } from "../lib/queries";
-import type { NodeStatus, NodeView } from "../lib/types";
+import type { NodeRequirements, NodeStatus, NodeView } from "../lib/types";
 import {
   Badge,
   Button,
@@ -47,6 +47,7 @@ import {
   LinkButton,
   LoadingPanel,
   PageHeader,
+  Select,
   Textarea,
   cn,
 } from "../components/ui";
@@ -238,6 +239,16 @@ function NodeDetail({ node, nodes }: { node: NodeView; nodes: NodeView[] }) {
           <dl className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
             <dt className="text-faint">Hostname</dt>
             <dd className="truncate font-mono text-muted">{node.hostname || "—"}</dd>
+            <dt className="text-faint">Aparece como</dt>
+            <dd className="truncate text-muted" title={node.display_name || undefined}>
+              {node.display_name?.trim() || "— (veem o nome técnico)"}
+            </dd>
+            {node.about?.trim() ? (
+              <>
+                <dt className="text-faint">Descrição</dt>
+                <dd className="text-muted">{node.about}</dd>
+              </>
+            ) : null}
             <dt className="text-faint">UUID</dt>
             <dd className="truncate font-mono text-muted" title={node.id}>{node.id}</dd>
             <dt className="text-faint">WireGuard</dt>
@@ -318,6 +329,37 @@ function NodeDetail({ node, nodes }: { node: NodeView; nodes: NodeView[] }) {
       </div>
 
       <div>
+        <div className="mb-4 rounded-lg border border-line bg-black/20 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] uppercase tracking-[0.16em] text-faint">Exigências do servidor</p>
+            {node.compliance && node.compliance.checks.length > 0 ? (
+              <Badge tone={node.compliance.compliant ? "ok" : "danger"}>
+                {node.compliance.compliant ? "conforme" : "não conforme"}
+              </Badge>
+            ) : (
+              <Badge tone="neutral">sem exigências</Badge>
+            )}
+          </div>
+          {node.compliance && node.compliance.checks.length > 0 ? (
+            <ul className="space-y-1">
+              {node.compliance.checks.map((check) => (
+                <li key={check.id} className="flex items-start gap-2 text-[11px]">
+                  <span className={check.ok ? "text-accent" : "text-danger"} aria-hidden="true">
+                    {check.ok ? "✓" : "✗"}
+                  </span>
+                  <span className="text-muted">
+                    <span className="text-ink">{check.label}</span>
+                    <span className="text-faint"> — {check.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[11px] text-muted">
+              Nada exigido. As exigências são avaliadas a partir do próximo relatório do agente.
+            </p>
+          )}
+        </div>
         <p className="mb-1.5 text-[10px] uppercase tracking-[0.16em] text-faint">
           Caminhos reportados pelo agente
         </p>
@@ -339,16 +381,48 @@ function EditNodeForm({ node, onClose, onSaved }: EditNodeFormProps) {
   const [name, setName] = useState(node.name);
   const [tags, setTags] = useState(tagsToText(node.tags));
   const [labelsText, setLabelsText] = useState(labelsToText(node.labels));
+  const requirements = node.requirements ?? {};
+  const [minVersion, setMinVersion] = useState(requirements.min_version ?? "");
+  const [requiredTags, setRequiredTags] = useState(tagsToText(requirements.required_tags ?? []));
+  const [requiredExtensions, setRequiredExtensions] = useState(
+    tagsToText(requirements.required_extensions ?? []),
+  );
+  const [mtu, setMtu] = useState(requirements.agent?.mtu?.toString() ?? "");
+  const [udpPort, setUdpPort] = useState(requirements.agent?.udp_port?.toString() ?? "");
+  const [forceRelay, setForceRelay] = useState(
+    requirements.agent?.force_relay == null ? "" : requirements.agent.force_relay ? "true" : "false",
+  );
+  const [expose, setExpose] = useState(tagsToText(requirements.agent?.expose ?? []));
+  const [tunName, setTunName] = useState(requirements.agent?.tun_name ?? "");
   const [formError, setFormError] = useState<string | null>(null);
   const ids = {
     name: useId(),
     tags: useId(),
     labels: useId(),
+    minVersion: useId(),
+    requiredTags: useId(),
+    requiredExtensions: useId(),
+    mtu: useId(),
+    udpPort: useId(),
+    forceRelay: useId(),
+    expose: useId(),
+    tunName: useId(),
   };
 
   const mutation = useMutation({
-    mutationFn: (body: { name: string; tags: string[]; labels: Record<string, string> }) =>
-      api.updateNode(node.id, body),
+    mutationFn: async (body: {
+      name: string;
+      tags: string[];
+      labels: Record<string, string>;
+      requirements: NodeRequirements;
+    }) => {
+      const updated = await api.updateNode(node.id, {
+        name: body.name,
+        tags: body.tags,
+        labels: body.labels,
+      });
+      return api.setNodeRequirements(updated.id, body.requirements);
+    },
     onSuccess: (updated) => {
       queryClient.setQueryData<NodeView[]>(["nodes"], (current) =>
         current?.map((item) => (item.id === updated.id ? updated : item)),
@@ -371,8 +445,34 @@ function EditNodeForm({ node, onClose, onSaved }: EditNodeFormProps) {
       setFormError(parsed.error);
       return;
     }
+    const mtuValue = mtu.trim();
+    if (mtuValue && (!Number.isInteger(Number(mtuValue)) || Number(mtuValue) < 576 || Number(mtuValue) > 9000)) {
+      setFormError("MTU deve ser um inteiro entre 576 e 9000.");
+      return;
+    }
+    const udpValue = udpPort.trim();
+    if (udpValue && (!Number.isInteger(Number(udpValue)) || Number(udpValue) < 1 || Number(udpValue) > 65535)) {
+      setFormError("Porta UDP deve ser um inteiro entre 1 e 65535.");
+      return;
+    }
     setFormError(null);
-    mutation.mutate({ name: trimmed, tags: parseTags(tags), labels: parsed.labels });
+    mutation.mutate({
+      name: trimmed,
+      tags: parseTags(tags),
+      labels: parsed.labels,
+      requirements: {
+        min_version: minVersion.trim() || null,
+        required_tags: parseTags(requiredTags),
+        required_extensions: parseTags(requiredExtensions),
+        agent: {
+          mtu: mtuValue ? Number(mtuValue) : null,
+          udp_port: udpValue ? Number(udpValue) : null,
+          force_relay: forceRelay === "" ? null : forceRelay === "true",
+          expose: parseTags(expose),
+          tun_name: tunName.trim() || null,
+        },
+      },
+    });
   }
 
   return (
@@ -417,6 +517,116 @@ function EditNodeForm({ node, onClose, onSaved }: EditNodeFormProps) {
             className="min-h-28 font-mono text-xs"
           />
         </Field>
+
+        <div className="space-y-3.5 rounded-lg border border-line bg-black/20 p-3">
+          <div>
+            <p className="text-[11px] font-medium text-ink">Exigências do servidor</p>
+            <p className="mt-0.5 text-[10px] leading-4 text-faint">
+              Opcional. O servidor compara com o que o agente reporta; não conformidade é
+              sinalizada e nunca desconecta o nó automaticamente.
+            </p>
+          </div>
+
+          <Field label="Versão mínima" htmlFor={ids.minVersion} hint="Ex.: 0.2.0. Vazio desliga a exigência.">
+            <Input
+              id={ids.minVersion}
+              value={minVersion}
+              onChange={(event) => setMinVersion(event.target.value)}
+              placeholder="0.2.0"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={mutation.isPending}
+            />
+          </Field>
+
+          <Field label="Tags exigidas" htmlFor={ids.requiredTags} hint="Separadas por vírgula. Precisam já existir no nó.">
+            <Input
+              id={ids.requiredTags}
+              value={requiredTags}
+              onChange={(event) => setRequiredTags(event.target.value)}
+              placeholder="mac, site"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={mutation.isPending}
+            />
+          </Field>
+
+          <Field
+            label="Extensões obrigatórias"
+            htmlFor={ids.requiredExtensions}
+            hint="Ids ativos e saudáveis. Ex.: cloudflared, seance."
+          >
+            <Input
+              id={ids.requiredExtensions}
+              value={requiredExtensions}
+              onChange={(event) => setRequiredExtensions(event.target.value)}
+              placeholder="cloudflared"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={mutation.isPending}
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="MTU exigido" htmlFor={ids.mtu} hint="576–9000">
+              <Input
+                id={ids.mtu}
+                value={mtu}
+                onChange={(event) => setMtu(event.target.value)}
+                placeholder="1280"
+                inputMode="numeric"
+                disabled={mutation.isPending}
+              />
+            </Field>
+            <Field label="Porta UDP exigida" htmlFor={ids.udpPort} hint="1–65535">
+              <Input
+                id={ids.udpPort}
+                value={udpPort}
+                onChange={(event) => setUdpPort(event.target.value)}
+                placeholder="41641"
+                inputMode="numeric"
+                disabled={mutation.isPending}
+              />
+            </Field>
+          </div>
+
+          <Field label="Relay exigido" htmlFor={ids.forceRelay} hint="Deixe em branco para não exigir.">
+            <Select
+              id={ids.forceRelay}
+              value={forceRelay}
+              onChange={(event) => setForceRelay(event.target.value)}
+              disabled={mutation.isPending}
+            >
+              <option value="">sem exigência</option>
+              <option value="false">caminho direto quando possível</option>
+              <option value="true">sempre pelo relay</option>
+            </Select>
+          </Field>
+
+          <Field label="Portas expostas exigidas" htmlFor={ids.expose} hint="Ex.: 3000, 8421:8422">
+            <Input
+              id={ids.expose}
+              value={expose}
+              onChange={(event) => setExpose(event.target.value)}
+              placeholder="3000"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={mutation.isPending}
+            />
+          </Field>
+
+          <Field label="TUN exigido" htmlFor={ids.tunName} hint="Ex.: utun9. Vazio desliga.">
+            <Input
+              id={ids.tunName}
+              value={tunName}
+              onChange={(event) => setTunName(event.target.value)}
+              placeholder="utun9"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={mutation.isPending}
+            />
+          </Field>
+        </div>
 
         {formError || mutation.isError ? (
           <p role="alert" className="rounded-md border border-danger/30 bg-danger/[0.07] px-3 py-2 text-xs leading-5 text-danger">
@@ -823,8 +1033,17 @@ function NodeRowFragment({
           </button>
         </td>
         <td className="max-w-[240px]">
-          <span className="block truncate text-[13px] font-medium text-ink">{node.name}</span>
-          <span className="block truncate text-[10px] text-faint">{node.hostname || "—"}</span>
+          <span className="block truncate text-[13px] font-medium text-ink">
+            {node.display_name?.trim() || node.name}
+          </span>
+          <span className="block truncate text-[10px] text-faint">
+            {node.display_name?.trim() ? `${node.name} · ${node.hostname || "—"}` : node.hostname || "—"}
+          </span>
+          {node.about?.trim() ? (
+            <span className="block truncate text-[10px] text-muted" title={node.about}>
+              {node.about}
+            </span>
+          ) : null}
           {summary.errors.length > 0 ? (
             <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-danger">
               <span aria-hidden="true" className="size-1 rounded-full bg-danger" />

@@ -127,6 +127,16 @@ async fn dispatch(
     control: &LocalControl,
 ) -> Result<Value, String> {
     match method {
+        "shutdown" => {
+            let tx = cmd_tx.clone();
+            tokio::spawn(async move {
+                // Allow the acknowledgment to reach the caller before the API
+                // listener task is aborted by the normal shutdown path.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let _ = tx.send(Cmd::Shutdown).await;
+            });
+            Ok(json!({"stopping": true}))
+        }
         "status" => {
             let snap = snapshot.read().await;
             serde_json::to_value(&snap.status).map_err(|e| e.to_string())
@@ -262,6 +272,32 @@ async fn dispatch(
                 }
             }
             Ok(json!({ "ok": true, "name": new_name }))
+        }
+        "set_profile" => {
+            let display_name = params
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let about = params.get("about").and_then(Value::as_str).unwrap_or_default();
+            let profile = wm_proto::validate_profile(display_name, about)?;
+            let view = control
+                .client
+                .update_profile(&control.token, &profile)
+                .await
+                .map_err(|err| err.to_string())?;
+            let new_name = view.node.display_name.clone();
+            let new_about = view.node.about.clone();
+            if let Ok(Some(mut state)) = NodeState::load(&control.state_path) {
+                state.display_name = new_name.clone();
+                state.about = new_about.clone();
+                if let Err(err) = state.save(&control.state_path) {
+                    tracing::warn!(%err, "não foi possível persistir o perfil do nó");
+                }
+            }
+            let mut snap = snapshot.write().await;
+            snap.status.display_name = new_name.clone();
+            snap.status.about = new_about.clone();
+            Ok(json!({ "ok": true, "display_name": new_name, "about": new_about }))
         }
         "resolve" => {
             let name = params

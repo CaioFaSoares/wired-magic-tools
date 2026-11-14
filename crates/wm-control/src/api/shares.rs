@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use wm_proto::{
     AdminCreateShareRequest, ControlEvent, CreateShareRequest, NodeStatus, NodeView,
-    RenameSelfRequest, ShareInfo, ShareKind, ShareProtocol, UpdateShareRequest,
-    validate_share_description, validate_share_name,
+    RenameSelfRequest, ShareInfo, ShareKind, ShareProtocol, UpdateProfileRequest,
+    UpdateShareRequest, validate_profile, validate_share_description, validate_share_name,
 };
 
 use super::{AdminAuth, ApiErr, NodeAuth, client_ip};
@@ -445,6 +445,42 @@ pub async fn rename_self(
         super::admin::recompile_acl(&state).await?;
         state.bump_version();
     }
+    let row = db::node_by_id(&state.db, auth.node.uuid())
+        .await?
+        .ok_or_else(|| ApiErr::not_found("node_not_found", "nó não encontrado"))?;
+    let view = row.view(db::now_ts());
+    state.broadcast(ControlEvent::NodeUpdated(Box::new(view.clone())));
+    Ok(Json(view))
+}
+
+/// Presentation identity: never touches the technical name used by ACL.
+pub async fn update_profile(
+    State(state): State<Arc<AppState>>,
+    auth: NodeAuth,
+    headers: HeaderMap,
+    Json(req): Json<UpdateProfileRequest>,
+) -> Result<Json<NodeView>, ApiErr> {
+    let profile = validate_profile(&req.display_name, &req.about)
+        .map_err(|err| ApiErr::bad_request("invalid_profile", err))?;
+    db::update_node_profile(
+        &state.db,
+        auth.node.uuid(),
+        &profile.display_name,
+        &profile.about,
+    )
+    .await?;
+    db::audit(
+        &state.db,
+        &format!("node:{}", auth.node.name),
+        "node.profile",
+        &auth.node.name,
+        Some(&format!("display_name={}", profile.display_name)),
+        client_ip(&headers).as_deref(),
+    )
+    .await
+    .ok();
+    // Peers see the new identity on their next map: bump the version.
+    state.bump_version();
     let row = db::node_by_id(&state.db, auth.node.uuid())
         .await?
         .ok_or_else(|| ApiErr::not_found("node_not_found", "nó não encontrado"))?;

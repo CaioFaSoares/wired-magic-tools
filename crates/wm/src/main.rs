@@ -21,6 +21,7 @@ mod chat;
 mod chat_tui;
 mod debug;
 mod debug_tui;
+mod desktop;
 mod discovery;
 mod gui;
 mod packages;
@@ -118,6 +119,9 @@ enum Command {
     DebugGui(DebugGuiArgs),
     /// Abre a TUI (o agente iniciado por ela continua rodando ao sair).
     Tui(TuiArgs),
+    /// Internal administrator-authorized desktop helper (not a general CLI proxy).
+    #[command(hide = true)]
+    DesktopHelper(desktop::DesktopArgs),
     /// Diagnóstico da máquina e do nó.
     Doctor,
     /// Instala/remove o serviço do agente.
@@ -145,6 +149,12 @@ struct HostArgs {
     approval_required: bool,
     #[arg(long)]
     name: Option<String>,
+    /// Nome de exibição do nó gateway mostrado aos outros membros.
+    #[arg(long)]
+    display_name: Option<String>,
+    /// Nota curta exibida ao lado do nome de exibição.
+    #[arg(long)]
+    about: Option<String>,
     #[arg(long)]
     no_agent: bool,
     #[arg(long, env = "WM_UDP_PORT", default_value_t = DEFAULT_UDP_PORT)]
@@ -208,6 +218,12 @@ struct JoinArgs {
     code: Option<String>,
     #[arg(long)]
     name: Option<String>,
+    /// Nome de exibição mostrado aos outros membros (não é a identidade ACL).
+    #[arg(long)]
+    display_name: Option<String>,
+    /// Nota curta exibida ao lado do nome de exibição.
+    #[arg(long)]
+    about: Option<String>,
     #[arg(long)]
     no_start: bool,
     #[arg(long)]
@@ -361,6 +377,9 @@ struct TuiArgs {
     /// Não captura o mouse (mantém a seleção de texto nativa do terminal).
     #[arg(long)]
     no_mouse: bool,
+    /// Perfil/rede local a abrir (cria na primeira vez).
+    #[arg(long)]
+    profile: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -438,6 +457,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         },
         Command::DebugGui(args) => debug::run(root, args.listen, args.title, args.node).await,
         Command::Tui(args) => run_tui(&root, args).await,
+        Command::DesktopHelper(args) => desktop::run(args).await,
         Command::Doctor => run_doctor(&root).await,
         Command::Service(args) => run_service(args, &root).await,
         Command::Version => {
@@ -509,6 +529,9 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
         labels: parse_labels(&args.labels)?,
         force_relay: false,
         expose: parse_expose(&args.expose)?,
+        display_name: args.display_name.clone(),
+        about: args.about.clone(),
+        disable_extensions: false,
     };
 
     let mut agent_state = match wm_core::NodeState::load(&agent_cfg.state_path())? {
@@ -617,6 +640,9 @@ async fn run_join(args: JoinArgs, root: PathBuf) -> anyhow::Result<()> {
         labels: parse_labels(&args.labels)?,
         force_relay: args.force_relay,
         expose: parse_expose(&args.expose)?,
+        display_name: args.display_name.clone(),
+        about: args.about.clone(),
+        disable_extensions: false,
     };
     if let Some(existing) = wm_core::NodeState::load(&cfg.state_path())? {
         if !args.force {
@@ -913,6 +939,8 @@ async fn run_status(root: &Path, as_json: bool) -> anyhow::Result<()> {
                         "running": false,
                         "node_id": s.node_id,
                         "node_name": s.node_name,
+                        "display_name": s.display_name,
+                        "about": s.about,
                         "overlay_ip": s.overlay_ip,
                         "control_url": s.control_url,
                         "error": err.to_string(),
@@ -924,6 +952,9 @@ async fn run_status(root: &Path, as_json: bool) -> anyhow::Result<()> {
                 println!("agente parado ({err})");
                 if let Some(s) = state {
                     println!("nó:     {}", s.node_name);
+                    if !s.display_name.trim().is_empty() {
+                        println!("aparece: {}", s.display_name);
+                    }
                     println!("overlay: {}", s.overlay_ip);
                     println!("control: {}", s.control_url);
                     println!("inicie com: wm up --data-dir {}", root.display());
@@ -950,6 +981,13 @@ fn print_status(value: &Value) {
     let online = value.get("peers_online").and_then(Value::as_u64).unwrap_or(0);
     let map = value.get("map_version").and_then(Value::as_u64).unwrap_or(0);
     println!("{name}  {ip}  tun={tun}");
+    if let Some(display) = value
+        .get("display_name")
+        .and_then(Value::as_str)
+        .filter(|display| !display.trim().is_empty())
+    {
+        println!("aparece como: {display}");
+    }
     println!(
         "control: {}   relay: {}   mapa: v{map}   peers: {online}/{peers}",
         if control { "ok" } else { "off" },
@@ -970,9 +1008,16 @@ async fn run_peers(root: &Path, as_json: bool) -> anyhow::Result<()> {
                     println!("nenhum peer no mapa ainda");
                 }
                 for peer in peers {
+                    let name = peer.get("name").and_then(Value::as_str).unwrap_or("?");
+                    let label = peer
+                        .get("display_name")
+                        .and_then(Value::as_str)
+                        .filter(|display| !display.trim().is_empty())
+                        .map(|display| format!("{display} ({name})"))
+                        .unwrap_or_else(|| name.to_string());
                     println!(
-                        "{:<20} {:<13} {:<8} {:<21} rtt={:<6} hs={:<5} rx={} tx={}",
-                        peer.get("name").and_then(Value::as_str).unwrap_or("?"),
+                        "{:<28} {:<13} {:<8} {:<21} rtt={:<6} hs={:<5} rx={} tx={}",
+                        label,
                         peer.get("overlay_ip").and_then(Value::as_str).unwrap_or("?"),
                         peer.get("path").and_then(Value::as_str).unwrap_or("?"),
                         peer.get("endpoint")
@@ -1077,11 +1122,21 @@ async fn run_extensions(
 }
 
 async fn run_tui(root: &Path, args: TuiArgs) -> anyhow::Result<()> {
+    let mut registry = root.to_path_buf();
+    let mut desktop_root = None;
+    if cfg!(target_os = "macos") && unsafe { libc::geteuid() } != 0 {
+        let home = std::env::var_os("HOME").context("HOME ausente para registry da UI")?;
+        registry = PathBuf::from(home).join("Library/Application Support/wired-magic/tui");
+        let absolute = if root.is_absolute() { root.to_path_buf() } else { std::env::current_dir()?.join(root) };
+        desktop_root = Some(std::fs::canonicalize(&absolute).unwrap_or(absolute));
+    }
     wm_tui::run_with(
-        root.to_path_buf(),
+        registry,
         wm_tui::RunOptions {
             no_auto_start: args.no_auto_start,
             no_mouse: args.no_mouse,
+            profile: args.profile,
+            desktop_root,
         },
     )
 }

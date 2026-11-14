@@ -287,6 +287,11 @@ mod tests {
             disabled_at: None,
             last_seen_at: Some(0),
             created_by: None,
+            display_name: String::new(),
+            about: String::new(),
+            requirements: "{}".into(),
+            compliance: "{}".into(),
+            agent_runtime: "{}".into(),
         }
     }
 

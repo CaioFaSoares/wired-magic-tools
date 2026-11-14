@@ -260,6 +260,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             patch(shares::update_own).delete(shares::delete_own),
         )
         .route("/node/self", patch(shares::rename_self))
+        .route("/node/profile", patch(shares::update_profile))
         .route("/admin/login", post(admin::login))
         .route("/admin/logout", post(admin::logout))
         .route("/admin/me", get(admin::me))
@@ -270,6 +271,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             patch(admin::update_node).delete(admin::revoke_node),
         )
         .route("/admin/nodes/{id}/approve", post(admin::approve_node))
+        .route(
+            "/admin/nodes/{id}/requirements",
+            axum::routing::put(admin::set_node_requirements),
+        )
         .route(
             "/admin/shares",
             get(shares::list_admin).post(shares::create_admin),

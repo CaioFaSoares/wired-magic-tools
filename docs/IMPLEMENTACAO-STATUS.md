@@ -104,6 +104,37 @@ Objetivo ativo: implementar o plano de prontidão até uma versão testável. N�
   físico/multiplexador e seleção de texto no terminal. O comportamento é coberto por
   `TestBackend` e eventos de mouse sintéticos; confirme com o terminal real.
 
+## Rodada 6 — identidade, várias redes e exigências por nó
+
+- Identidade de exibição separada da identidade ACL: `display_name`/`about` no enrollment,
+  editáveis pelo próprio nó (`PATCH /api/v1/node/profile` e `set_profile` na API local),
+  propagadas no mapa para painéis, TUI e CLI. O nome técnico continua sendo a identidade usada
+  por ACL e não muda ao personalizar a apresentação.
+- TUI multi-rede: `profiles.json` (0600) na raiz do data-dir, `default` como perfil legado
+  (data-dir antigo), demais perfis em `profiles/<slug>/`. Aba **Redes** alterna a rede ativa,
+  cria/renomeia/remove perfis e inicia/para agentes independentes; `wm tui --profile <slug>`
+  abre ou cria o perfil. Agentes de outros perfis continuam rodando após a troca; colisão de
+  overlay entre perfis ativos aparece como `⚠`.
+- Exigências por nó no control plane: versão mínima, tags e extensões obrigatórias, e
+  parâmetros do agente (UDP, MTU, relay, expose, TUN). O agente reporta `version` e o runtime
+  observado; `compliance::evaluate` compara e publica `NodeCompliance` no `NodeView`/mapa.
+  Não conformidade é sinalizada, nunca desconecta o nó. Editor no painel (**Nós → editar**),
+  leitura na TUI e `PUT /api/v1/admin/nodes/{id}/requirements`.
+- Aprovação por convite: `require_approval` opcional no convite (padrão `false`, só convite).
+  Quando ligado, os nós daquele convite entram `pending` até aprovação administrativa.
+- Regressões novas: 3 testes HTTP de identidade/exigências/aprovação, 5 testes de perfis na
+  TUI e 3 testes de conformidade; suíte integrada abaixo.
+- Verificação desta rodada: `CARGO_HOME="$PWD/.cargo-home" cargo test --workspace --offline`
+  — **211 aprovados, 2 ignorados** (inclui as regressões de desktop/PTY integradas em paralelo); `pnpm --dir web typecheck` e `pnpm --dir web build` exit 0.
+- Smoke HTTP no binário real (`wm host --no-agent`, banco novo): enrollment com `display_name`
+  normalizado, mapa expondo a identidade, `PATCH /node/profile` sem mudar o nome técnico,
+  exigências gravadas, relatório observado reprovando (versão/MTU/extensão) e depois aprovando,
+  e convite com `require_approval` entrando `pending` — todos PASS. Estado descartável removido.
+- Não executado: TUI em TTY real, troca de perfil com dois agentes TUN reais, painel web em
+  navegador e validação de conformidade sob TUN/Docker. Multi-tenant (várias malhas com ACL e
+  tokens isolados no mesmo processo de control) **não** entrou: cada rede é um control plane
+  próprio e a TUI gerencia os vários perfis/servidores.
+
 ## Marco e próximos passos externos
 
 **Implementado para testes locais, não aprovado para produção.** Reproduzir com [teste local](TESTE-LOCAL.md). Serviços: [roteiro](SERVICOS-TESTE.md). Rede: [E2E assertivo](E2E-ASSERTIVO.md).

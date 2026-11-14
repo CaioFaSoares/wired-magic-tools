@@ -29,6 +29,10 @@ pub const DEFAULT_MTU: u16 = 1280;
 pub const DEFAULT_UDP_PORT: u16 = 41641;
 pub const DEFAULT_STUN_PORT: u16 = 3478;
 pub const DEFAULT_RELAY_PATH: &str = "/relay";
+/// Maximum length of a presentation display name (Unicode scalar values).
+pub const MAX_DISPLAY_NAME: usize = 64;
+/// Maximum length of the short "about" note.
+pub const MAX_ABOUT: usize = 160;
 
 pub type NodeId = Uuid;
 
@@ -93,6 +97,8 @@ impl fmt::Display for PathKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub id: NodeId,
+    /// Stable technical name. It is the ACL identity and must not be used for
+    /// presentation; use [`PeerInfo::display_name`] for that.
     pub name: String,
     pub hostname: String,
     pub overlay_ip: Ipv4Addr,
@@ -106,6 +112,13 @@ pub struct PeerInfo {
     pub endpoints: Vec<EndpointCandidate>,
     pub online: bool,
     pub last_seen: Option<DateTime<Utc>>,
+    /// Friendly identity shown by panels. Empty means "not configured"; UIs
+    /// fall back to the technical `name`.
+    #[serde(default)]
+    pub display_name: String,
+    /// Short free-text note shown next to the display name.
+    #[serde(default)]
+    pub about: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +133,10 @@ pub struct SelfInfo {
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
     pub dns_name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub about: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +177,13 @@ pub struct NetworkMap {
     /// its overlay address. Local `--expose` specs are merged by the agent.
     #[serde(default)]
     pub exposes: Vec<MeshExpose>,
+    /// Requirements the operator attached to this node. Sent to the agent so
+    /// the TUI can show what the server expects without an admin API.
+    #[serde(default)]
+    pub requirements: NodeRequirements,
+    /// Result of the server-side evaluation of those requirements.
+    #[serde(default)]
+    pub compliance: NodeCompliance,
     pub server_time: DateTime<Utc>,
 }
 
@@ -185,11 +209,16 @@ pub struct TuiSpec {
     pub mode: TuiMode,
     /// Command to run. `{wm}` is replaced by the current `wm` executable and
     /// `{extension_dir}` by the local extension directory when known.
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default = "default_tui_refresh")]
     pub refresh_secs: u64,
+    /// Options expanded as `{option:key}` in `command`/`args` (and `cwd` for
+    /// panes).
+    #[serde(default)]
+    pub options: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +229,9 @@ pub enum TuiMode {
     Snapshot,
     /// The TUI suspends itself and runs the command full-screen.
     Exec,
+    /// The TUI runs the command inside an embedded pseudo-terminal. The
+    /// extension implements its own interface and receives keyboard input.
+    Pane,
 }
 
 fn default_tui_refresh() -> u64 {
@@ -425,6 +457,42 @@ pub struct EnrollRequest {
     pub tags: Vec<String>,
     #[serde(default)]
     pub nat_type: NatType,
+    /// Presentation identity; never used as an ACL identity.
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub about: String,
+}
+
+/// Body of `PATCH /api/v1/node/profile`. The technical `name` is untouched.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdateProfileRequest {
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub about: String,
+}
+
+/// Validates and normalizes a presentation profile. Empty values clear the
+/// profile (UIs then fall back to the technical name).
+pub fn validate_profile(display_name: &str, about: &str) -> Result<UpdateProfileRequest, String> {
+    let display_name = display_name.trim();
+    let about = about.trim();
+    if display_name.chars().count() > MAX_DISPLAY_NAME {
+        return Err(format!(
+            "nome de exibição deve ter no máximo {MAX_DISPLAY_NAME} caracteres"
+        ));
+    }
+    if about.chars().count() > MAX_ABOUT {
+        return Err(format!("descrição deve ter no máximo {MAX_ABOUT} caracteres"));
+    }
+    if display_name.chars().any(char::is_control) || about.chars().any(char::is_control) {
+        return Err("nome de exibição e descrição não podem ter caracteres de controle".into());
+    }
+    Ok(UpdateProfileRequest {
+        display_name: display_name.to_string(),
+        about: about.to_string(),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,6 +535,12 @@ pub struct ReportRequest {
     pub relay_connected: bool,
     #[serde(default)]
     pub extensions: Vec<ExtensionStatus>,
+    /// Agent version currently running, so version requirements are evaluated
+    /// from the observed binary and not only from enrollment.
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub agent: AgentRuntime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -669,6 +743,91 @@ pub struct NodeView {
     pub relay_connected: bool,
     #[serde(default)]
     pub reported_peers: Vec<PeerStats>,
+    /// Requirements the operator attached to this node. Empty means none.
+    #[serde(default)]
+    pub requirements: NodeRequirements,
+    /// Last compliance evaluation. Recomputed on every report and admin edit.
+    #[serde(default)]
+    pub compliance: NodeCompliance,
+}
+
+/// Configuration values the operator expects a node to run with. Every field is
+/// optional; `None` means "not required".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRequirements {
+    #[serde(default)]
+    pub udp_port: Option<u16>,
+    #[serde(default)]
+    pub mtu: Option<u16>,
+    #[serde(default)]
+    pub force_relay: Option<bool>,
+    /// Normalized `porta` or `overlay:local` specs, as accepted by `--expose`.
+    #[serde(default)]
+    pub expose: Option<Vec<String>>,
+    #[serde(default)]
+    pub tun_name: Option<String>,
+}
+
+/// Per-node requirements. The node reports what it actually runs and the
+/// control plane publishes the resulting [`NodeCompliance`]; requirements are
+/// advisory in this version and never silently disconnect a node.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRequirements {
+    /// Minimum `wm` version, compared with semver when both parse.
+    #[serde(default)]
+    pub min_version: Option<String>,
+    /// Extension ids that must be activated and healthy on the node.
+    #[serde(default)]
+    pub required_extensions: Vec<String>,
+    /// Tags the node must carry. Tags are authoritative metadata set by the
+    /// invitation/admin, so this check is observational rather than self-served.
+    #[serde(default)]
+    pub required_tags: Vec<String>,
+    #[serde(default)]
+    pub agent: AgentRequirements,
+}
+
+impl NodeRequirements {
+    pub fn is_empty(&self) -> bool {
+        self.min_version.is_none()
+            && self.required_extensions.is_empty()
+            && self.required_tags.is_empty()
+            && self.agent == AgentRequirements::default()
+    }
+}
+
+/// One evaluated requirement, with a human-readable explanation for the TUI
+/// and the web panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequirementCheck {
+    pub id: String,
+    pub label: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NodeCompliance {
+    pub compliant: bool,
+    pub checked_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub checks: Vec<RequirementCheck>,
+}
+
+/// What the agent actually runs. Sent in every report so the control plane can
+/// evaluate per-node requirements without guessing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRuntime {
+    #[serde(default)]
+    pub udp_port: Option<u16>,
+    #[serde(default)]
+    pub mtu: Option<u16>,
+    #[serde(default)]
+    pub force_relay: Option<bool>,
+    #[serde(default)]
+    pub expose: Vec<String>,
+    #[serde(default)]
+    pub tun_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -694,6 +853,10 @@ pub struct CreateJoinTokenRequest {
     pub tags: Vec<String>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// Puts nodes enrolled with this invitation in `pending` until an admin
+    /// approves them. Defaults to `false` (invitation alone is enough).
+    #[serde(default)]
+    pub require_approval: bool,
 }
 
 fn default_token_ttl() -> i64 {
@@ -716,6 +879,9 @@ pub struct JoinTokenView {
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// When true, enrollment through this invitation requires admin approval.
+    #[serde(default)]
+    pub require_approval: bool,
     /// Only present in the creation response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -1059,6 +1225,17 @@ pub struct AgentStatus {
     pub uptime_secs: u64,
     pub map_version: u64,
     pub last_error: Option<String>,
+    /// Presentation identity as known to the control plane (empty = not set).
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub about: String,
+    /// Per-node requirements published in the last map.
+    #[serde(default)]
+    pub requirements: NodeRequirements,
+    /// Server-side compliance result published in the last map.
+    #[serde(default)]
+    pub compliance: NodeCompliance,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1074,6 +1251,10 @@ pub struct PeerStatus {
     pub tx_bytes: u64,
     pub relay_online: bool,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub about: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

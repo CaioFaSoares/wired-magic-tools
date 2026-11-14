@@ -42,6 +42,8 @@ pub async fn enroll(
     }
     let wg_key = decode_wg_key(&req.wg_public_key)
         .ok_or_else(|| ApiErr::bad_request("invalid_key", "chave WireGuard inválida (32 bytes base64)"))?;
+    let profile = wm_proto::validate_profile(&req.display_name, &req.about)
+        .map_err(|err| ApiErr::bad_request("invalid_profile", err))?;
 
     let token_hash = auth::hash_token(&req.join_token);
     if db::name_exists(&state.db, &name).await? {
@@ -64,6 +66,8 @@ pub async fn enroll(
     let node_token_hash = auth::hash_token(&node_token);
     let mut req = req;
     req.wg_public_key = wg_key;
+    req.display_name = profile.display_name;
+    req.about = profile.about;
     let node = db::enroll_node(
         &state.db, &req, &token_hash, &node_token_hash, status, state.overlay,
     )
@@ -174,6 +178,8 @@ pub async fn report(
         &req.peers,
         req.nat_type,
         req.relay_connected,
+        &req.version,
+        &req.agent,
     )
     .await?;
     if req.extensions.len() > 64 {
@@ -191,12 +197,45 @@ pub async fn report(
             state: status.state,
         });
     }
-    if let Some(row) = db::node_by_id(&state.db, auth.node.uuid()).await? {
+    if let Some(mut row) = db::node_by_id(&state.db, auth.node.uuid()).await? {
+        // Recompute requirements from what the node reported, not from what it
+        // claims about compliance. A failing requirement never disconnects the
+        // node; it is published for the panels.
+        let requirements = row.requirements();
+        let compliance = crate::compliance::evaluate(
+            row.version.as_deref().unwrap_or_default(),
+            &row.tags(),
+            &req.agent,
+            &req.extensions,
+            &requirements,
+        );
+        let changed = compliance_changed(&row.compliance, &compliance);
+        db::set_node_compliance(&state.db, auth.node.uuid(), &compliance).await?;
+        row.compliance = serde_json::to_string(&compliance).unwrap_or_else(|_| "{}".into());
         // Reports refresh presence but do not bump the map version; otherwise
-        // every node would wake every long-poll every 30 seconds.
+        // every node would wake every long-poll every 30 seconds. Compliance
+        // transitions are the exception: the node itself needs the new verdict
+        // in its next map so the TUI can show it.
+        if changed {
+            state.bump_version();
+        }
         state.broadcast(ControlEvent::NodeUpdated(Box::new(row.view(db::now_ts()))));
     }
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Compares the *verdict* only (not `checked_at`) so periodic reports do not
+/// keep bumping the map version.
+fn compliance_changed(previous: &str, next: &wm_proto::NodeCompliance) -> bool {
+    let previous: wm_proto::NodeCompliance =
+        serde_json::from_str(previous).unwrap_or_default();
+    previous.compliant != next.compliant
+        || previous.checks.len() != next.checks.len()
+        || previous
+            .checks
+            .iter()
+            .zip(next.checks.iter())
+            .any(|(a, b)| a.id != b.id || a.ok != b.ok)
 }
 
 pub async fn leave(
@@ -253,6 +292,8 @@ pub async fn build_map(state: &Arc<AppState>, me: &db::NodeRow) -> anyhow::Resul
         tags: me.tags(),
         labels: me.labels(),
         dns_name: format!("{}.{}", me.name, state.network.dns_zone),
+        display_name: me.display_name.clone(),
+        about: me.about.clone(),
     };
     let extensions = state.extensions.desired_for(state, me).await;
     let shares = super::shares::map_shares(state, &nodes).await;
@@ -272,6 +313,8 @@ pub async fn build_map(state: &Arc<AppState>, me: &db::NodeRow) -> anyhow::Resul
         extensions,
         shares,
         exposes,
+        requirements: me.requirements(),
+        compliance: me.compliance(),
         server_time: chrono::Utc::now(),
     })
 }

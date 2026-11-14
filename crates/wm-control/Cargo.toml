@@ -26,6 +26,7 @@ mime_guess.workspace = true
 rand_core.workspace = true
 rust-embed.workspace = true
 rustls.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

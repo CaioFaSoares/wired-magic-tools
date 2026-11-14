@@ -53,6 +53,10 @@ impl AgentLock {
     pub fn acquire(root: &Path) -> anyhow::Result<Self> {
         fs::create_dir_all(root)?;
         let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(root.join("agent.lock"))?;
+        Self::from_verified_file(file)
+    }
+    /// Acquire a lock already opened and validated by a privileged caller.
+    pub(crate) fn from_verified_file(file: File) -> anyhow::Result<Self> {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             bail!("outro agente/host usa este data-dir; pare-o antes de continuar");
         }

@@ -15,12 +15,14 @@ use wm_proto::{
 };
 
 use crate::agent;
+use crate::profiles;
 use crate::persist::{
     self, AgentSettings, EnrolledNode, NoticeRecord, PersistedJob, PersistedState, SnapshotCache,
 };
 
-pub const TABS: [&str; 9] = [
+pub const TABS: [&str; 10] = [
     "Início",
+    "Redes",
     "Peers",
     "Shares",
     "Mapa",
@@ -31,14 +33,15 @@ pub const TABS: [&str; 9] = [
     "Ajuda",
 ];
 pub const TAB_STATUS: usize = 0;
-pub const TAB_PEERS: usize = 1;
-pub const TAB_SHARES: usize = 2;
-pub const TAB_TOPOLOGY: usize = 3;
-pub const TAB_AGENT: usize = 4;
-pub const TAB_EXTENSIONS: usize = 5;
-pub const TAB_SERVICES: usize = 6;
-pub const TAB_CONSOLE: usize = 7;
-pub const TAB_HELP: usize = 8;
+pub const TAB_NETWORKS: usize = 1;
+pub const TAB_PEERS: usize = 2;
+pub const TAB_SHARES: usize = 3;
+pub const TAB_TOPOLOGY: usize = 4;
+pub const TAB_AGENT: usize = 5;
+pub const TAB_EXTENSIONS: usize = 6;
+pub const TAB_SERVICES: usize = 7;
+pub const TAB_CONSOLE: usize = 8;
+pub const TAB_HELP: usize = 9;
 
 /// One dynamic tab contributed by an extension's `[tui]` manifest section.
 #[derive(Debug, Clone)]
@@ -112,6 +115,7 @@ impl Level {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MouseAction {
     Tab(usize),
+    SelectProfile(usize),
     SelectPeer(usize),
     SelectShare(usize),
     SelectJob(usize),
@@ -144,6 +148,13 @@ pub enum MouseAction {
     Reconnect,
     CopyPeer,
     RenameNode,
+    Profile,
+    NewProfile,
+    RenameProfile,
+    SwitchProfile,
+    StartProfile,
+    StopProfile,
+    RemoveProfile,
     OpenGui,
     CloseGui,
     AdminPanel,
@@ -344,6 +355,12 @@ pub enum FormAction {
     RenameNode,
     AgentSettings,
     ProbePort,
+    /// Edits the presentation identity of the active enrollment.
+    Profile,
+    /// Creates a new local profile directory and switches to it.
+    NewProfile,
+    /// Renames the local label of a profile.
+    RenameProfile(String),
 }
 
 #[derive(Debug)]
@@ -417,6 +434,7 @@ pub enum ConfirmAction {
     StartServe,
     InstallService,
     UninstallService,
+    RemoveProfile(String),
 }
 
 #[derive(Debug)]
@@ -437,7 +455,7 @@ fn index_of_extension_tab(index: usize) -> Option<usize> {
     index.checked_sub(TABS.len())
 }
 
-fn truncate_text(text: &str, limit: usize) -> String {
+pub(crate) fn truncate_text(text: &str, limit: usize) -> String {
     let mut out: String = text.chars().take(limit).collect();
     if text.chars().count() > limit {
         out.push('…');
@@ -446,7 +464,21 @@ fn truncate_text(text: &str, limit: usize) -> String {
 }
 
 pub struct App {
+    /// Data directory of the active profile.
     pub root: PathBuf,
+    pub desktop_root: Option<PathBuf>,
+    /// Root that owns `profiles.json` and the `profiles/` directory.
+    pub registry_root: PathBuf,
+    pub profiles: profiles::Registry,
+    pub profile_status: Vec<profiles::ProfileStatus>,
+    pub active_profile: String,
+    /// Selection in the "Redes" tab.
+    pub profiles_table: TableState,
+    /// Set when the user asks to switch/enroll another profile; the session
+    /// loop tears down this view and reopens on the new root.
+    pub pending_switch: Option<(String, bool)>,
+    /// Open the join form as soon as the session starts (new profile flow).
+    pub pending_join: bool,
     pub exe: PathBuf,
     pub socket: PathBuf,
     pub log_path: PathBuf,
@@ -463,6 +495,9 @@ pub struct App {
     pub extension_tabs: Vec<ExtensionTab>,
     /// Comando exec pedido por uma aba; o event loop suspende a TUI e executa.
     pub pending_tui_exec: Option<String>,
+    /// PTYs embutidos das abas `mode = "pane"`.
+    pub panes: std::collections::HashMap<String, crate::pane::Pane>,
+    pub pane_errors: std::collections::HashMap<String, String>,
     pub node: Option<EnrolledNode>,
     /// Why `agent-state.json` could not be read (permissions/parse), if so.
     pub node_error: Option<String>,
@@ -697,8 +732,17 @@ impl App {
         let peer_index = state.peer_index;
         let share_index = state.share_index;
 
+        let root_for_registry = root.clone();
         let mut app = Self {
             root,
+            desktop_root: None,
+            registry_root: root_for_registry.clone(),
+            profiles: profiles::Registry::default(),
+            profile_status: Vec::new(),
+            active_profile: profiles::LEGACY_SLUG.to_string(),
+            profiles_table: TableState::default(),
+            pending_switch: None,
+            pending_join: false,
             exe,
             socket: socket.clone(),
             log_path,
@@ -712,6 +756,8 @@ impl App {
             catalog_error: None,
             extension_tabs: Vec::new(),
             pending_tui_exec: None,
+            panes: std::collections::HashMap::new(),
+            pane_errors: std::collections::HashMap::new(),
             node: None,
             node_error: None,
             live: false,
@@ -849,6 +895,40 @@ impl App {
 
     pub fn is_enrolled(&self) -> bool {
         self.node.is_some()
+    }
+
+    /// Applies the registry and active profile chosen by the session loop.
+    pub fn set_profile_context(
+        &mut self,
+        registry_root: &std::path::Path,
+        registry: profiles::Registry,
+        slug: String,
+    ) {
+        self.registry_root = registry_root.to_path_buf();
+        self.profiles = registry;
+        self.active_profile = slug;
+        self.refresh_profiles();
+    }
+
+    /// Re-reads every profile from disk. Cheap enough to call on tab entry and
+    /// after any lifecycle action.
+    pub fn refresh_profiles(&mut self) {
+        self.profile_status = profiles::refresh(&self.registry_root, &self.profiles);
+        let index = self
+            .profile_status
+            .iter()
+            .position(|status| status.slug == self.active_profile);
+        let selected = match self.profiles_table.selected() {
+            Some(current) => Some(current.min(self.profile_status.len().saturating_sub(1))),
+            None => index.or((!self.profile_status.is_empty()).then_some(0)),
+        };
+        self.profiles_table.select(selected);
+    }
+
+    pub fn selected_profile(&self) -> Option<&profiles::ProfileStatus> {
+        self.profiles_table
+            .selected()
+            .and_then(|index| self.profile_status.get(index))
     }
 
     pub fn is_own_share(&self, share: &ShareInfo) -> bool {
@@ -1055,9 +1135,12 @@ impl App {
                     self.node = Some(EnrolledNode {
                         node_name: name,
                         overlay_ip: ip.to_string(),
+                        overlay_cidr: String::new(),
                         control_url: status.control_url.clone().unwrap_or_default(),
                         network_name: String::new(),
                         created_at: None,
+                        display_name: status.display_name.clone(),
+                        about: status.about.clone(),
                     });
                 }
             }
@@ -1263,10 +1346,65 @@ pub fn join_form() -> Form {
                 "ex.: https://mesh.exemplo.com; use com o token",
             ),
             Field::text("token wmj_", "", 400, "convite manual; não é gravado em disco"),
-            Field::text("nome deste nó", "", 63, "opcional; padrão é o hostname"),
+            Field::text("nome deste nó", "", 63, "opcional; identidade técnica usada pela ACL"),
+            Field::text(
+                "como você aparece",
+                "",
+                64,
+                "opcional; nome de exibição para os outros membros (dá para editar depois)",
+            ),
         ],
     )
     .with_note("a inscrição é gravada em agent-state.json; o agente inicia em seguida")
+}
+
+/// Edits the presentation identity of the active profile. The technical node
+/// name is intentionally not editable here (use `n` on Peers/Início).
+pub fn profile_form(display_name: &str, about: &str) -> Form {
+    Form::new(
+        "Meu perfil",
+        FormAction::Profile,
+        vec![
+            Field::text(
+                "como você aparece",
+                display_name,
+                64,
+                "vazio usa o nome técnico do nó no que os outros veem",
+            ),
+            Field::text(
+                "descrição curta",
+                about,
+                160,
+                "opcional, ex.: 'rack da sala' ou 'Maria (trabalho)'",
+            ),
+        ],
+    )
+    .with_note("isto não muda o nome técnico nem as regras de ACL")
+}
+
+pub fn new_profile_form() -> Form {
+    Form::new(
+        "Nova rede local",
+        FormAction::NewProfile,
+        vec![
+            Field::text("nome para você", "", 40, "ex.: Amigos, Servidor técnico"),
+            Field::text(
+                "identificador",
+                "",
+                32,
+                "vazio deriva do nome; use letras, números e '-'",
+            ),
+        ],
+    )
+    .with_note("cria um data-dir isolado; a inscrição no convite vem em seguida")
+}
+
+pub fn rename_profile_form(slug: &str, current: &str) -> Form {
+    Form::new(
+        "Renomear rede local",
+        FormAction::RenameProfile(slug.to_string()),
+        vec![Field::text("nome para você", current, 40, "só muda o rótulo local")],
+    )
 }
 
 pub fn new_share_form() -> Form {
@@ -1377,6 +1515,10 @@ mod tests {
 
     pub fn sample_status() -> AgentStatus {
         AgentStatus {
+            display_name: String::new(),
+            about: String::new(),
+            requirements: Default::default(),
+            compliance: Default::default(),
             version: "0.1.0".into(),
             node_id: Some(Uuid::new_v4()),
             node_name: Some("site".into()),
@@ -1397,6 +1539,8 @@ mod tests {
 
     pub fn sample_peer(name: &str, path: PathKind) -> PeerStatus {
         PeerStatus {
+            display_name: String::new(),
+            about: String::new(),
             id: Uuid::new_v4(),
             name: name.into(),
             overlay_ip: "10.66.0.12".parse().unwrap(),

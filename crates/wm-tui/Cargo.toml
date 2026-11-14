@@ -12,9 +12,12 @@ anyhow.workspace = true
 chrono.workspace = true
 libc.workspace = true
 ratatui.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
+portable-pty = "0.9"
+vt100 = "0.16"
 toml.workspace = true
 tokio.workspace = true
 uuid.workspace = true

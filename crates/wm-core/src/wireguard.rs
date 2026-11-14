@@ -28,6 +28,8 @@ pub enum WgOut {
 pub struct WgPeer {
     pub id: NodeId,
     pub name: String,
+    pub display_name: String,
+    pub about: String,
     pub overlay_ip: Ipv4Addr,
     pub public_key: String,
     pub endpoints: Vec<SocketAddr>,
@@ -131,6 +133,8 @@ impl WgEngine {
         for info in peers {
             if let Some(peer) = self.peers.get_mut(&info.id) {
                 peer.name = info.name.clone();
+                peer.display_name = info.display_name.clone();
+                peer.about = info.about.clone();
                 peer.overlay_ip = info.overlay_ip;
                 peer.public_key = info.wg_public_key.clone();
                 peer.endpoints = endpoint_order(&info.endpoints);
@@ -163,6 +167,8 @@ impl WgEngine {
                 WgPeer {
                     id: info.id,
                     name: info.name.clone(),
+                    display_name: info.display_name.clone(),
+                    about: info.about.clone(),
                     overlay_ip: info.overlay_ip,
                     public_key: info.wg_public_key.clone(),
                     endpoints: endpoint_order(&info.endpoints),
@@ -427,6 +433,8 @@ mod tests {
             endpoints: vec![],
             online: true,
             last_seen: None,
+            display_name: String::new(),
+            about: String::new(),
         }
     }
 

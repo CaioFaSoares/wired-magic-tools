@@ -60,8 +60,26 @@ fn errno() -> i32 {
     io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
+/// Only missing or refused sockets prove absence. Permission and other errors
+/// must remain errors: they do not establish that a daemon is stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketProbe {
+    Listening,
+    Absent,
+}
+
+pub fn probe_socket(socket: &Path) -> io::Result<SocketProbe> {
+    match std::os::unix::net::UnixStream::connect(socket) {
+        Ok(_) => Ok(SocketProbe::Listening),
+        Err(err) if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
+            Ok(SocketProbe::Absent)
+        }
+        Err(err) => Err(err),
+    }
+}
+
 pub fn socket_ready(socket: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(socket).is_ok()
+    matches!(probe_socket(socket), Ok(SocketProbe::Listening))
 }
 
 pub fn read_pid(root: &Path) -> Option<u32> {
@@ -73,15 +91,19 @@ pub fn read_pid(root: &Path) -> Option<u32> {
 
 /// True when another process currently holds the data-dir agent lock. The
 /// agent holds it from start to shutdown, so it is a stronger liveness signal
-/// than a pid file that may be stale.
+/// than a pid file that may be stale. Inaccessible locks and unknown errors
+/// are treated as busy, never as permission to clean up a running agent.
 pub fn agent_lock_held(root: &Path) -> bool {
     use std::os::fd::AsRawFd;
-    let Ok(file) = OpenOptions::new()
+    let file = match OpenOptions::new()
         .read(true)
         .write(true)
         .open(root.join("agent.lock"))
-    else {
-        return false;
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return false,
+        // Inaccessible or otherwise unverifiable locks are conservatively busy.
+        Err(_) => return true,
     };
     let fd = file.as_raw_fd();
     let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
@@ -165,7 +187,7 @@ pub fn log_tail(path: &Path) -> Vec<String> {
 /// Removes pid/socket files left by an agent killed without graceful cleanup.
 /// A live pid or a listening socket is never touched.
 fn clean_stale(root: &Path, socket: &Path) {
-    if socket_ready(socket) || agent_lock_held(root) {
+    if !matches!(probe_socket(socket), Ok(SocketProbe::Absent)) || agent_lock_held(root) {
         return;
     }
     if let Some(pid) = read_pid(root) {
@@ -244,6 +266,17 @@ pub fn start(
     log: &Path,
     tx: &Sender<Msg>,
 ) -> io::Result<u32> {
+    match probe_socket(socket) {
+        Ok(SocketProbe::Absent) => {}
+        Ok(SocketProbe::Listening) => {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "o agente já está ouvindo no socket"));
+        }
+        Err(err) => {
+            return Err(io::Error::new(err.kind(), format!(
+                "não foi possível verificar o socket {}: {err}; nenhum agente novo foi iniciado", socket.display()
+            )));
+        }
+    }
     clean_stale(root, socket);
     rotate_log(log);
     if let Some(parent) = log.parent() {
@@ -496,16 +529,76 @@ mod tests {
     use std::io::Write;
 
     fn temp_root(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "wm-tui-agent-{label}-{}-{}",
+        // Unix socket paths are limited to ~104 bytes; keep the temporary
+        // directory short even when TMPDIR is long (macOS /var/folders/...).
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let root = PathBuf::from("/tmp").join(format!(
+            "wm-{}-{}-{}",
+            &label[..label.len().min(4)],
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            nanos
         ));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn socket_probe_distinguishes_missing_refused_and_listening() {
+        let root = temp_root("probe");
+        let socket = root.join("agent.sock");
+        assert_eq!(probe_socket(&socket).unwrap(), SocketProbe::Absent);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert_eq!(probe_socket(&socket).unwrap(), SocketProbe::Listening);
+        drop(listener);
+        assert_eq!(probe_socket(&socket).unwrap(), SocketProbe::Absent);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inaccessible_socket_and_lock_never_trigger_cleanup_or_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+        // Root bypasses DAC; exercise this test under an ordinary user.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let root = temp_root("denied");
+        let socket = root.join("agent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        fs::write(root.join("agent.pid"), "0\n").unwrap();
+        fs::write(root.join("agent.lock"), "").unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
+        let probe = probe_socket(&socket);
+        let held = agent_lock_held(&root);
+        clean_stale(&root, &socket);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let started = start(&root, Path::new("/nonexistent/wm"), Vec::new(), &socket, &root.join("agent.log"), &tx);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(probe.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(held);
+        let error = started.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("nenhum agente novo"));
+        assert!(socket.exists());
+        assert!(root.join("agent.pid").exists());
+        assert!(!root.join("agent.log").exists());
+        drop(listener);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_socket_error_preserves_stale_files() {
+        let root = temp_root("unknown-probe");
+        let socket = root.join("x".repeat(150));
+        fs::write(&socket, "not a socket").unwrap();
+        fs::write(root.join("agent.pid"), "0\n").unwrap();
+        assert!(probe_socket(&socket).is_err());
+        clean_stale(&root, &socket);
+        assert!(socket.exists());
+        assert!(root.join("agent.pid").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

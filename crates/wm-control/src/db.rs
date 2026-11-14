@@ -274,6 +274,16 @@ async fn init_schema(pool: &SqlitePool) -> anyhow::Result<()> {
     // Keep upgrades from a previous alpha data directory working.
     ensure_column(pool, "extension_status", "name", "name TEXT NOT NULL DEFAULT ''").await?;
     ensure_column(pool, "extension_status", "driver", "driver TEXT NOT NULL DEFAULT ''").await?;
+    // Presentation identity is separate from the technical name used by ACL.
+    ensure_column(pool, "nodes", "display_name", "display_name TEXT NOT NULL DEFAULT ''").await?;
+    ensure_column(pool, "nodes", "about", "about TEXT NOT NULL DEFAULT ''").await?;
+    // Operator requirements and the last evaluated compliance snapshot.
+    ensure_column(pool, "nodes", "requirements", "requirements TEXT NOT NULL DEFAULT '{}'").await?;
+    ensure_column(pool, "nodes", "compliance", "compliance TEXT NOT NULL DEFAULT '{}'").await?;
+    ensure_column(pool, "nodes", "agent_runtime", "agent_runtime TEXT NOT NULL DEFAULT '{}'").await?;
+    // Invitations can require explicit approval per enrollment; the default
+    // stays "invitation alone is enough".
+    ensure_column(pool, "join_tokens", "require_approval", "require_approval INTEGER NOT NULL DEFAULT 0").await?;
     Ok(())
 }
 
@@ -447,6 +457,7 @@ pub struct JoinTokenRow {
     pub created_at: i64,
     pub created_by: Option<String>,
     pub revoked_at: Option<i64>,
+    pub require_approval: i64,
 }
 
 impl_from_row!(JoinTokenRow {
@@ -461,7 +472,8 @@ impl_from_row!(JoinTokenRow {
     expires_at,
     created_at,
     created_by,
-    revoked_at
+    revoked_at,
+    require_approval
 });
 
 impl JoinTokenRow {
@@ -483,6 +495,7 @@ impl JoinTokenRow {
             expires_at: ts_to_dt(self.expires_at),
             created_at: ts_to_dt(self.created_at),
             revoked_at: opt_dt(self.revoked_at),
+            require_approval: self.require_approval != 0,
             token: None,
         }
     }
@@ -499,10 +512,52 @@ pub async fn create_join_token(
     ttl_secs: i64,
     created_by: &str,
 ) -> anyhow::Result<JoinTokenRow> {
+    create_join_token_full(
+        pool, name, prefix, token_hash, tags, labels, max_uses, ttl_secs, false, created_by,
+    )
+    .await
+}
+
+/// Creates an invitation that additionally requires explicit admin approval on
+/// enrollment. Kept separate so existing callers keep the invitation-only
+/// default.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_join_token_with_approval(
+    pool: &SqlitePool,
+    name: &str,
+    prefix: &str,
+    token_hash: &str,
+    tags: &[String],
+    labels: &BTreeMap<String, String>,
+    max_uses: i64,
+    ttl_secs: i64,
+    require_approval: bool,
+    created_by: &str,
+) -> anyhow::Result<JoinTokenRow> {
+    create_join_token_full(
+        pool, name, prefix, token_hash, tags, labels, max_uses, ttl_secs, require_approval,
+        created_by,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_join_token_full(
+    pool: &SqlitePool,
+    name: &str,
+    prefix: &str,
+    token_hash: &str,
+    tags: &[String],
+    labels: &BTreeMap<String, String>,
+    max_uses: i64,
+    ttl_secs: i64,
+    require_approval: bool,
+    created_by: &str,
+) -> anyhow::Result<JoinTokenRow> {
     let id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO join_tokens(id, name, prefix, token_hash, tags, labels, max_uses, uses, expires_at, created_at, created_by)
-         VALUES(?,?,?,?,?,?,?,0,?,?,?)",
+        "INSERT INTO join_tokens(id, name, prefix, token_hash, tags, labels, max_uses, uses, expires_at, created_at, created_by, require_approval)
+         VALUES(?,?,?,?,?,?,?,0,?,?,?,?)",
     )
     .bind(id.to_string())
     .bind(name)
@@ -514,6 +569,7 @@ pub async fn create_join_token(
     .bind(now_ts() + ttl_secs)
     .bind(now_ts())
     .bind(created_by)
+    .bind(if require_approval { 1i64 } else { 0i64 })
     .execute(pool)
     .await?;
     get_join_token(pool, id).await?.ok_or_else(|| anyhow!("join token sumiu"))
@@ -562,6 +618,11 @@ pub struct NodeRow {
     pub disabled_at: Option<i64>,
     pub last_seen_at: Option<i64>,
     pub created_by: Option<String>,
+    pub display_name: String,
+    pub about: String,
+    pub requirements: String,
+    pub compliance: String,
+    pub agent_runtime: String,
 }
 
 impl_from_row!(NodeRow {
@@ -584,7 +645,12 @@ impl_from_row!(NodeRow {
     approved_at,
     disabled_at,
     last_seen_at,
-    created_by
+    created_by,
+    display_name,
+    about,
+    requirements,
+    compliance,
+    agent_runtime
 });
 
 impl NodeRow {
@@ -622,6 +688,22 @@ impl NodeRow {
             .map(|ts| now.saturating_sub(ts) <= ONLINE_WINDOW_SECS)
             .unwrap_or(false)
     }
+    /// Friendly name for panels; empty when the member did not configure one.
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+    pub fn about(&self) -> &str {
+        &self.about
+    }
+    pub fn requirements(&self) -> wm_proto::NodeRequirements {
+        serde_json::from_str(&self.requirements).unwrap_or_default()
+    }
+    pub fn compliance(&self) -> wm_proto::NodeCompliance {
+        serde_json::from_str(&self.compliance).unwrap_or_default()
+    }
+    pub fn agent_runtime(&self) -> wm_proto::AgentRuntime {
+        serde_json::from_str(&self.agent_runtime).unwrap_or_default()
+    }
     pub fn peer_info(&self, now: i64) -> PeerInfo {
         PeerInfo {
             id: self.uuid(),
@@ -634,6 +716,8 @@ impl NodeRow {
             endpoints: self.endpoints(),
             online: self.online(now),
             last_seen: opt_dt(self.last_seen_at),
+            display_name: self.display_name.clone(),
+            about: self.about.clone(),
         }
     }
     pub fn reported_peers(&self) -> Vec<PeerStats> {
@@ -649,6 +733,8 @@ impl NodeRow {
             nat_type: self.nat_type(),
             relay_connected: self.relay_connected != 0,
             reported_peers: self.reported_peers(),
+            requirements: self.requirements(),
+            compliance: self.compliance(),
         }
     }
 }
@@ -786,7 +872,8 @@ pub async fn enroll_node(
     }
     // A client choosing a name already used as an ACL identity requires explicit
     // admin approval, even on networks otherwise allowing automatic enrollment.
-    let status = if acl_name_reserved(&mut tx, req.name.trim()).await? {
+    // An invitation may also require approval for every enrollment it creates.
+    let status = if token.require_approval != 0 || acl_name_reserved(&mut tx, req.name.trim()).await? {
         NodeStatus::Pending
     } else {
         status
@@ -796,8 +883,16 @@ pub async fn enroll_node(
         &req.version, &req.wg_public_key, &tags, &labels, status,
         &format!("join-token:{}", token.prefix), node_token_hash, net,
     ).await?;
+    if !req.display_name.is_empty() || !req.about.is_empty() {
+        sqlx::query("UPDATE nodes SET display_name = ?, about = ? WHERE id = ?")
+            .bind(req.display_name.trim())
+            .bind(req.about.trim())
+            .bind(&node.id)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
-    Ok(node)
+    Ok(node_by_id(pool, node.uuid()).await?.unwrap_or(node))
 }
 
 /// Allocates the next free overlay address and creates the node plus its first
@@ -977,15 +1072,21 @@ pub async fn update_node_report(
     peers: &[PeerStats],
     nat_type: NatType,
     relay_connected: bool,
+    version: &str,
+    agent: &wm_proto::AgentRuntime,
 ) -> anyhow::Result<()> {
     let now = now_ts();
     sqlx::query(
-        "UPDATE nodes SET reported_peers = ?, nat_type = ?, relay_connected = ?, last_seen_at = ? WHERE id = ?",
+        "UPDATE nodes SET reported_peers = ?, nat_type = ?, relay_connected = ?, last_seen_at = ?,
+         version = CASE WHEN ? = '' THEN version ELSE ? END, agent_runtime = ? WHERE id = ?",
     )
     .bind(serde_json::to_string(peers)?)
     .bind(nat_type_str(nat_type))
     .bind(if relay_connected { 1i64 } else { 0i64 })
     .bind(now)
+    .bind(version)
+    .bind(version)
+    .bind(serde_json::to_string(agent)?)
     .bind(id)
     .execute(pool)
     .await?;
@@ -1023,6 +1124,48 @@ fn nat_type_str(n: NatType) -> &'static str {
         NatType::Cone => "cone",
         NatType::Symmetric => "symmetric",
     }
+}
+
+/// Updates the presentation identity only. Callers must validate/normalize it.
+pub async fn update_node_profile(
+    pool: &SqlitePool,
+    id: Uuid,
+    display_name: &str,
+    about: &str,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE nodes SET display_name = ?, about = ? WHERE id = ?")
+        .bind(display_name)
+        .bind(about)
+        .bind(id.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_node_requirements(
+    pool: &SqlitePool,
+    id: Uuid,
+    requirements: &wm_proto::NodeRequirements,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE nodes SET requirements = ? WHERE id = ?")
+        .bind(serde_json::to_string(requirements)?)
+        .bind(id.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_node_compliance(
+    pool: &SqlitePool,
+    id: Uuid,
+    compliance: &wm_proto::NodeCompliance,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE nodes SET compliance = ? WHERE id = ?")
+        .bind(serde_json::to_string(compliance)?)
+        .bind(id.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

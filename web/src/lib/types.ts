@@ -28,6 +28,9 @@ export interface PeerInfo {
   endpoints: EndpointCandidate[];
   online: boolean;
   last_seen: IsoDate | null;
+  /** Identidade de exibição; vazio/ausente usa o nome técnico. */
+  display_name?: string;
+  about?: string;
 }
 
 export interface PeerStats {
@@ -50,6 +53,36 @@ export interface NodeView extends PeerInfo {
   nat_type: NatType;
   relay_connected: boolean;
   reported_peers: PeerStats[];
+  requirements?: NodeRequirements;
+  compliance?: NodeCompliance;
+}
+
+export interface AgentRequirements {
+  udp_port?: number | null;
+  mtu?: number | null;
+  force_relay?: boolean | null;
+  expose?: string[] | null;
+  tun_name?: string | null;
+}
+
+export interface NodeRequirements {
+  min_version?: string | null;
+  required_extensions?: string[];
+  required_tags?: string[];
+  agent?: AgentRequirements;
+}
+
+export interface RequirementCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface NodeCompliance {
+  compliant: boolean;
+  checked_at?: IsoDate | null;
+  checks: RequirementCheck[];
 }
 
 export interface UpdateNodeRequest {
@@ -85,6 +118,8 @@ export interface CreateJoinTokenRequest {
   max_uses: number;
   tags: string[];
   labels: LabelMap;
+  /** Exige aprovação administrativa por inscrição. Padrão: só o convite. */
+  require_approval?: boolean;
 }
 
 export interface JoinTokenView {
@@ -98,6 +133,7 @@ export interface JoinTokenView {
   expires_at: IsoDate;
   created_at: IsoDate;
   revoked_at: IsoDate | null;
+  require_approval?: boolean;
   /** Presente somente na resposta de criação. */
   token?: string;
 }

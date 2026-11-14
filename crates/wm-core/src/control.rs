@@ -7,8 +7,8 @@ use serde::de::DeserializeOwned;
 
 use wm_proto::{
     ApiErrorBody, CreateShareRequest, EndpointsRequest, EnrollRequest, EnrollResponse,
-    NetworkMap, NodeExtensionView, NodeView, ReportRequest, ShareInfo, UpdateShareRequest,
-    VersionInfo,
+    NetworkMap, NodeExtensionView, NodeView, ReportRequest, ShareInfo, UpdateProfileRequest,
+    UpdateShareRequest, VersionInfo,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -246,6 +246,21 @@ impl ControlClient {
             .patch(self.url("/api/v1/node/self"))
             .bearer_auth(token)
             .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await?;
+        Self::parse(resp).await
+    }
+
+    pub async fn update_profile(
+        &self,
+        token: &str,
+        profile: &UpdateProfileRequest,
+    ) -> Result<NodeView, ControlError> {
+        let resp = self
+            .http
+            .patch(self.url("/api/v1/node/profile"))
+            .bearer_auth(token)
+            .json(profile)
             .send()
             .await?;
         Self::parse(resp).await

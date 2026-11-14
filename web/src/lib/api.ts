@@ -19,6 +19,7 @@ import type {
   AdminSession,
   LoginRequest,
   LoginResponse,
+  NodeRequirements,
   NodeView,
   ReloadExtensionsResponse,
   Overview,
@@ -237,6 +238,13 @@ export const api = {
   updateNode(id: string, body: UpdateNodeRequest): Promise<NodeView> {
     return request<NodeView>(`/admin/nodes/${encodeURIComponent(id)}`, {
       method: "PATCH",
+      body,
+    });
+  },
+
+  setNodeRequirements(id: string, body: NodeRequirements): Promise<NodeView> {
+    return request<NodeView>(`/admin/nodes/${encodeURIComponent(id)}/requirements`, {
+      method: "PUT",
       body,
     });
   },

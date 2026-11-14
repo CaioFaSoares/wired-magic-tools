@@ -16,8 +16,8 @@ use uuid::Uuid;
 use wm_proto::{
     AclPolicy, AclView, AdminUser, AuditEventView, ControlEvent, CreateJoinTokenRequest,
     CreateServiceTokenRequest, JoinTokenView, LoginRequest, LoginResponse, NodeStatus, NodeView,
-    Overview, ServiceTokenView, SettingsView, SimulateRequest, SimulateResponse,
-    UpdateNodeRequest,
+    NodeRequirements, Overview, ServiceTokenView, SettingsView, SimulateRequest,
+    SimulateResponse, UpdateNodeRequest,
 };
 
 use super::{AdminAuth, ApiErr, client_ip, client_ua};
@@ -279,8 +279,144 @@ pub async fn update_node(
     Ok(Json(view))
 }
 
-pub async fn revoke_node(
+/// Replaces the per-node requirements. Empty requirements clear the policy.
+/// Compliance is recomputed immediately from the last observed report so the
+/// panel does not wait for the next 30 s heartbeat.
+pub async fn set_node_requirements(
     State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(mut req): Json<NodeRequirements>,
+) -> Result<Json<NodeView>, ApiErr> {
+    auth.require_csrf(&headers)?;
+    let Some(current) = db::node_by_id(&state.db, id).await? else {
+        return Err(ApiErr::not_found("node_not_found", "nó não encontrado"));
+    };
+    normalize_requirements(&mut req);
+    validate_requirements(&req).map_err(|err| ApiErr::bad_request("invalid_requirements", err))?;
+    db::set_node_requirements(&state.db, id, &req).await?;
+    let statuses: Vec<wm_proto::ExtensionStatus> =
+        crate::extensions::store::list_statuses_for_node(&state.db, id)
+            .await?
+            .iter()
+            .map(|row| row.view())
+            .collect();
+    let compliance = crate::compliance::evaluate(
+        current.version.as_deref().unwrap_or_default(),
+        &current.tags(),
+        &current.agent_runtime(),
+        &statuses,
+        &req,
+    );
+    db::set_node_compliance(&state.db, id, &compliance).await?;
+    db::audit(
+        &state.db,
+        &format!("admin:{}", auth.username()),
+        "node.requirements",
+        &current.name,
+        Some(&serde_json::to_string(&req).unwrap_or_default()),
+        client_ip(&headers).as_deref(),
+    )
+    .await
+    .ok();
+    state.bump_version();
+    let row = db::node_by_id(&state.db, id)
+        .await?
+        .ok_or_else(|| ApiErr::not_found("node_not_found", "nó não encontrado"))?;
+    let view = row.view(db::now_ts());
+    state.broadcast(ControlEvent::NodeUpdated(Box::new(view.clone())));
+    Ok(Json(view))
+}
+
+/// Empty strings/vectors from the panel mean "no requirement", not "require
+/// empty". Normalize before validating/storing.
+fn normalize_requirements(req: &mut NodeRequirements) {
+    if req.min_version.as_deref().is_some_and(|value| value.trim().is_empty()) {
+        req.min_version = None;
+    }
+    if req.agent.tun_name.as_deref().is_some_and(|value| value.trim().is_empty()) {
+        req.agent.tun_name = None;
+    }
+    if req.agent.expose.as_ref().is_some_and(Vec::is_empty) {
+        req.agent.expose = None;
+    }
+    req.required_tags = req
+        .required_tags
+        .iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    req.required_extensions = req
+        .required_extensions
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+}
+
+fn validate_requirements(req: &NodeRequirements) -> Result<(), String> {
+    if let Some(version) = req.min_version.as_deref() {
+        let version = version.trim();
+        if version.is_empty() || version.chars().count() > 32 || version.chars().any(char::is_control) {
+            return Err("versão mínima inválida".into());
+        }
+    }
+    if req.required_extensions.len() > 16 {
+        return Err("no máximo 16 extensões obrigatórias".into());
+    }
+    for ext in &req.required_extensions {
+        if ext.is_empty()
+            || ext.len() > 64
+            || !ext
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            return Err(format!("id de extensão inválido: '{ext}'"));
+        }
+    }
+    if req.required_tags.len() > 16 {
+        return Err("no máximo 16 tags obrigatórias".into());
+    }
+    for tag in &req.required_tags {
+        let tag = tag.trim();
+        if tag.is_empty() || tag.len() > 64 || tag.chars().any(char::is_control) {
+            return Err(format!("tag inválida: '{tag}'"));
+        }
+    }
+    if req.agent.udp_port == Some(0) {
+        return Err("porta UDP 0 não é válida".into());
+    }
+    if let Some(mtu) = req.agent.mtu {
+        if !(576..=9000).contains(&mtu) {
+            return Err("MTU deve estar entre 576 e 9000".into());
+        }
+    }
+    if let Some(expose) = &req.agent.expose {
+        if expose.len() > 16 {
+            return Err("no máximo 16 portas expostas exigidas".into());
+        }
+        for spec in expose {
+            if crate::compliance::normalize_expose(spec).is_none() {
+                return Err(format!("porta exposta inválida: '{spec}'"));
+            }
+        }
+    }
+    if let Some(tun) = req.agent.tun_name.as_deref() {
+        let tun = tun.trim();
+        if tun.is_empty()
+            || tun.len() > 15
+            || !tun
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            return Err("nome de TUN inválido".into());
+        }
+    }
+    Ok(())
+}
+
+pub async fn revoke_node(    State(state): State<Arc<AppState>>,
     auth: AdminAuth,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
@@ -333,7 +469,7 @@ pub async fn create_join_token(
     let token = auth::random_token("wmj_")?;
     let hash = auth::hash_token(&token);
     let prefix: String = token.chars().take(12).collect();
-    let row = db::create_join_token(
+    let row = db::create_join_token_with_approval(
         &state.db,
         name,
         &prefix,
@@ -342,6 +478,7 @@ pub async fn create_join_token(
         &req.labels,
         uses,
         ttl,
+        req.require_approval,
         &format!("admin:{}", auth.username()),
     )
     .await?;

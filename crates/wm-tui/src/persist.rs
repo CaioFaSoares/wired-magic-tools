@@ -169,11 +169,18 @@ pub struct EnrolledNode {
     #[serde(default)]
     pub overlay_ip: String,
     #[serde(default)]
+    pub overlay_cidr: String,
+    #[serde(default)]
     pub control_url: String,
     #[serde(default)]
     pub network_name: String,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
+    /// Presentation identity; empty means "not configured".
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub about: String,
 }
 
 pub fn state_path(root: &Path) -> PathBuf {

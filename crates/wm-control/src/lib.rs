@@ -3,6 +3,7 @@
 pub mod acl;
 pub mod api;
 pub mod auth;
+pub mod compliance;
 pub mod config;
 pub mod db;
 pub mod extensions;

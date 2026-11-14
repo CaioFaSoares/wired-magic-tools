@@ -29,6 +29,20 @@ pub fn local_call(socket: &Path, method: &str, params: Value) -> Result<Value, S
     use std::io::{BufRead, BufReader, Write};
     let mut stream = std::os::unix::net::UnixStream::connect(socket)
         .map_err(|err| format!("socket {}: {err}", socket.display()))?;
+    #[cfg(target_os = "macos")]
+    if crate::desktop::is_socket(socket) {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+        let parent = socket.parent().ok_or("socket desktop sem diretório")?;
+        let meta = std::fs::symlink_metadata(parent).map_err(|e| e.to_string())?;
+        if !meta.is_dir() || meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+            return Err("diretório IPC desktop não confiável".into());
+        }
+        let (mut uid, mut gid) = (u32::MAX, u32::MAX);
+        if unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } != 0 || uid != 0 {
+            return Err("peer do helper desktop não é root".into());
+        }
+    }
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(9)))
         .ok();
@@ -79,10 +93,14 @@ pub fn submit_form(app: &mut App, tx: &Sender<Msg>) {
     let action = form.action.clone();
     match action {
         FormAction::Join => {
+            if app.desktop_root.is_some() {
+                return restore_error(app, form, "enrollment root não implementado neste fluxo incremental; o desktop conecta apenas a nó root já inscrito");
+            }
             let code = form.value_owned(0);
             let url = form.value_owned(1);
             let token = form.value_owned(2);
             let name = form.value_owned(3);
+            let display_name = form.value_owned(4);
             // Accept a wmc_ code in either field, and a wm://join link as-is.
             let raw_code = if !code.is_empty() {
                 code.clone()
@@ -137,6 +155,10 @@ pub fn submit_form(app: &mut App, tx: &Sender<Msg>) {
             if !name.is_empty() {
                 args.push("--name".into());
                 args.push(name);
+            }
+            if !display_name.is_empty() {
+                args.push("--display-name".into());
+                args.push(display_name);
             }
             args.push("--no-start".into());
             let root = app.root.clone();
@@ -328,6 +350,103 @@ pub fn submit_form(app: &mut App, tx: &Sender<Msg>) {
             };
             probe_peer(app, peer, port, tx);
         }
+        FormAction::Profile => {
+            if app.node.is_none() {
+                return restore_error(app, form, "este perfil ainda não está inscrito");
+            }
+            let display_name = form.value_owned(0);
+            let about = form.value_owned(1);
+            if display_name.chars().count() > wm_proto::MAX_DISPLAY_NAME
+                || about.chars().count() > wm_proto::MAX_ABOUT
+            {
+                form.focus = if display_name.chars().count() > wm_proto::MAX_DISPLAY_NAME {
+                    0
+                } else {
+                    1
+                };
+                return restore_error(app, form, "texto longo demais");
+            }
+            match local_call(
+                &app.socket,
+                "set_profile",
+                json!({ "display_name": display_name, "about": about }),
+            ) {
+                Ok(_) => {
+                    if let Some(status) = app.status.as_mut() {
+                        status.display_name = display_name.clone();
+                        status.about = about.clone();
+                    }
+                    if let Some(node) = app.node.as_mut() {
+                        node.display_name = display_name.clone();
+                        node.about = about;
+                    }
+                    app.dirty = true;
+                    app.notify(
+                        Level::Good,
+                        if display_name.is_empty() {
+                            "perfil limpo; os outros veem o nome técnico".to_string()
+                        } else {
+                            format!("agora você aparece como '{display_name}' nesta rede")
+                        },
+                    );
+                }
+                Err(err) => return restore_error(app, form, err),
+            }
+        }
+        FormAction::NewProfile => {
+            let label = form.value_owned(0);
+            let raw_slug = form.value_owned(1);
+            let slug = if raw_slug.is_empty() {
+                match crate::profiles::normalize_slug(&label) {
+                    Ok(slug) => slug,
+                    Err(err) => {
+                        form.focus = 0;
+                        return restore_error(app, form, err);
+                    }
+                }
+            } else {
+                match crate::profiles::normalize_slug(&raw_slug) {
+                    Ok(slug) => slug,
+                    Err(err) => {
+                        form.focus = 1;
+                        return restore_error(app, form, err);
+                    }
+                }
+            };
+            let entry = match app.profiles.create(&label, &slug) {
+                Ok(entry) => entry,
+                Err(err) => {
+                    form.focus = 1;
+                    return restore_error(app, form, err);
+                }
+            };
+            if let Err(err) = crate::profiles::ensure_profile_dir(&app.registry_root, &entry) {
+                app.profiles.remove(&entry.slug).ok();
+                return restore_error(app, form, format!("não foi possível criar o diretório: {err}"));
+            }
+            app.profiles.active = Some(entry.slug.clone());
+            if let Err(err) = crate::profiles::save(&app.registry_root, &app.profiles) {
+                return restore_error(app, form, format!("não foi possível salvar profiles.json: {err}"));
+            }
+            app.pending_switch = Some((entry.slug.clone(), true));
+            app.quit = true;
+        }
+        FormAction::RenameProfile(slug) => {
+            let label = form.value_owned(0);
+            match app.profiles.rename(&slug, &label) {
+                Ok(()) => {
+                    if let Err(err) = crate::profiles::save(&app.registry_root, &app.profiles) {
+                        return restore_error(app, form, format!("não foi possível salvar: {err}"));
+                    }
+                    app.refresh_profiles();
+                    app.notify(Level::Good, format!("rede renomeada para '{label}'"));
+                }
+                Err(err) => {
+                    form.focus = 0;
+                    return restore_error(app, form, err);
+                }
+            }
+        }
     }
 }
 
@@ -415,6 +534,10 @@ fn join_then_start(
 // ---------------------------------------------------------------------------
 
 pub fn start_agent(app: &mut App, tx: &Sender<Msg>) {
+    if let Some(root) = &app.desktop_root {
+        crate::desktop::connect(root.clone(), app.exe.clone(), true, true, tx.clone());
+        return;
+    }
     if app.live || agent::socket_ready(&app.socket) {
         app.live = true;
         app.notify(Level::Info, "o agente já está ativo");
@@ -440,6 +563,30 @@ pub fn start_agent(app: &mut App, tx: &Sender<Msg>) {
             "iniciar o agente exige root; reabra com sudo wm tui (ou use :join ... --no-start só para inscrever)",
         );
         return;
+    }
+    if let Some(overlay) = app
+        .node
+        .as_ref()
+        .map(|node| node.overlay_cidr.clone())
+        .filter(|cidr| !cidr.is_empty())
+    {
+        if let Some(other) = crate::profiles::refresh(&app.registry_root, &app.profiles)
+            .into_iter()
+            .find(|status| {
+                status.slug != app.active_profile
+                    && status.running
+                    && status.overlay_cidr == overlay
+            })
+        {
+            app.notify(
+                Level::Error,
+                format!(
+                    "não iniciar: o overlay {overlay} já está ativo em '{}' e as rotas colidiriam",
+                    other.label
+                ),
+            );
+            return;
+        }
     }
     if agent::agent_lock_held(&app.root) {
         if app.agent.starting.is_none() {
@@ -491,6 +638,20 @@ pub fn start_agent(app: &mut App, tx: &Sender<Msg>) {
 }
 
 pub fn stop_agent_now(app: &mut App, tx: &Sender<Msg>, keep_auto_start: bool) {
+    if app.desktop_root.is_some() {
+        if !keep_auto_start { app.auto_start = false; }
+        app.dirty = true;
+        let socket = app.socket.clone();
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let (level, message) = match local_call(&socket, "shutdown", Value::Null) {
+                Ok(_) => (Level::Info, "parada solicitada via API autenticada".to_string()),
+                Err(e) => (Level::Warn, format!("não foi possível parar via API: {e}; daemon legado pode não suportar shutdown; nenhum PID foi sinalizado")),
+            };
+            let _ = tx.send(Msg::Notify(level, message));
+        });
+        return;
+    }
     let live = app.live || agent::socket_ready(&app.socket);
     if !live && app.agent.starting.is_none() && app.agent.stopping.is_none() {
         app.notify(Level::Info, "o agente já está parado");
@@ -592,6 +753,7 @@ pub fn perform_confirm(app: &mut App, action: ConfirmAction, tx: &Sender<Msg>) {
                 app.notify(Level::Info, format!("parando {label} (pid {pid})…"));
             }
         }
+        ConfirmAction::RemoveProfile(slug) => remove_profile_now(app, &slug),
         ConfirmAction::StartHost => start_host(app, tx),
         ConfirmAction::StartServe => start_serve(app, tx),
         ConfirmAction::DeleteShare(id) => {
@@ -761,6 +923,30 @@ fn start_from_console(app: &mut App, args: Vec<String>, tx: &Sender<Msg>) {
             "iniciar o agente exige root; reabra com sudo wm tui (ou use :join ... --no-start só para inscrever)",
         );
         return;
+    }
+    if let Some(overlay) = app
+        .node
+        .as_ref()
+        .map(|node| node.overlay_cidr.clone())
+        .filter(|cidr| !cidr.is_empty())
+    {
+        if let Some(other) = crate::profiles::refresh(&app.registry_root, &app.profiles)
+            .into_iter()
+            .find(|status| {
+                status.slug != app.active_profile
+                    && status.running
+                    && status.overlay_cidr == overlay
+            })
+        {
+            app.notify(
+                Level::Error,
+                format!(
+                    "não iniciar: o overlay {overlay} já está ativo em '{}' e as rotas colidiriam",
+                    other.label
+                ),
+            );
+            return;
+        }
     }
     if agent::agent_lock_held(&app.root) {
         if app.agent.starting.is_none() {
@@ -1427,6 +1613,169 @@ pub fn copy_text(value: &str) -> bool {
         .wait()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+/// Opens the "Meu perfil" form for the active enrollment.
+pub fn open_profile(app: &mut App) {
+    if app.node.is_none() {
+        app.notify(
+            Level::Warn,
+            "entre na malha primeiro para configurar como você aparece",
+        );
+        return;
+    }
+    let (display, about) = app
+        .node
+        .as_ref()
+        .map(|node| (node.display_name.clone(), node.about.clone()))
+        .unwrap_or_default();
+    app.form = Some(crate::app::profile_form(&display, &about));
+}
+
+pub fn open_new_profile(app: &mut App) {
+    app.form = Some(crate::app::new_profile_form());
+}
+
+pub fn open_rename_profile(app: &mut App) {
+    let Some(status) = app.selected_profile().cloned() else {
+        app.notify(Level::Warn, "selecione uma rede na aba Redes");
+        return;
+    };
+    app.form = Some(crate::app::rename_profile_form(&status.slug, &status.label));
+}
+
+/// Switches the session to another profile. The current view is saved first;
+/// the agent of this profile keeps running detached.
+pub fn switch_profile(app: &mut App, slug: &str) {
+    if slug == app.active_profile {
+        app.notify(Level::Info, "esta já é a rede ativa");
+        return;
+    }
+    app.profiles.active = Some(slug.to_string());
+    if let Err(err) = crate::profiles::save(&app.registry_root, &app.profiles) {
+        app.notify(Level::Error, format!("não foi possível salvar profiles.json: {err}"));
+        return;
+    }
+    app.pending_switch = Some((slug.to_string(), false));
+    app.quit = true;
+}
+
+pub fn start_profile(app: &mut App) {
+    let Some(status) = app.selected_profile().cloned() else {
+        app.notify(Level::Warn, "selecione uma rede na aba Redes");
+        return;
+    };
+    if !status.enrolled {
+        app.notify(
+            Level::Warn,
+            format!("'{}' ainda não está inscrita; entre primeiro nesta rede", status.label),
+        );
+        return;
+    }
+    if status.running {
+        app.notify(Level::Info, "o agente desta rede já está ativo");
+        return;
+    }
+    if !status.overlay_cidr.is_empty() {
+        if let Some(other) = app.profile_status.iter().find(|other| {
+            other.slug != status.slug
+                && other.running
+                && other.overlay_cidr == status.overlay_cidr
+        }) {
+            app.notify(
+                Level::Error,
+                format!(
+                    "não iniciar '{}': o overlay {} já está ativo em '{}' e as rotas colidiriam",
+                    status.label, status.overlay_cidr, other.label
+                ),
+            );
+            return;
+        }
+    }
+    match crate::profiles::start_detached(&app.registry_root, &app.exe, &status.slug) {
+        Ok(pid) => {
+            app.notify(
+                Level::Info,
+                format!("agente de '{}' iniciado (pid {pid})", status.label),
+            );
+            app.refresh_profiles();
+        }
+        Err(err) => app.notify(
+            Level::Error,
+            format!("não foi possível iniciar '{}': {err}", status.label),
+        ),
+    }
+}
+
+pub fn stop_profile(app: &mut App) {
+    let Some(status) = app.selected_profile().cloned() else {
+        app.notify(Level::Warn, "selecione uma rede na aba Redes");
+        return;
+    };
+    if status.slug == app.active_profile {
+        app.notify(
+            Level::Warn,
+            "esta é a rede ativa; use o botão Parar na aba Início",
+        );
+        return;
+    }
+    match crate::profiles::stop_detached(&app.registry_root, &status.slug) {
+        Ok(pid) => {
+            app.notify(
+                Level::Warn,
+                format!("parando o agente de '{}' (pid {pid})…", status.label),
+            );
+            app.refresh_profiles();
+        }
+        Err(err) => app.notify(
+            Level::Error,
+            format!("não foi possível parar '{}': {err}", status.label),
+        ),
+    }
+}
+
+pub fn confirm_remove_profile(app: &mut App) {
+    let Some(status) = app.selected_profile().cloned() else {
+        app.notify(Level::Warn, "selecione uma rede na aba Redes");
+        return;
+    };
+    if status.slug == crate::profiles::LEGACY_SLUG {
+        app.notify(Level::Warn, "o perfil 'default' não pode ser removido");
+        return;
+    }
+    if status.slug == app.active_profile {
+        app.notify(Level::Warn, "troque para outra rede antes de remover a ativa");
+        return;
+    }
+    if status.running {
+        app.notify(Level::Warn, "pare o agente desta rede antes de removê-la");
+        return;
+    }
+    let detail = if crate::profiles::has_data(&app.registry_root, &status.slug) {
+        "O diretório local desta rede (inscrição, shares e extensões) será apagado."
+    } else {
+        "O diretório local ainda está vazio."
+    };
+    app.confirm = Some(Confirm {
+        title: format!("Remover '{}'", status.label),
+        lines: vec![
+            detail.into(),
+            "A inscrição no servidor não é revogada automaticamente.".into(),
+            "Para apenas parar a conexão, use x sem remover.".into(),
+        ],
+        action: ConfirmAction::RemoveProfile(status.slug),
+    });
+}
+
+pub fn remove_profile_now(app: &mut App, slug: &str) {
+    match crate::profiles::remove_profile(&app.registry_root, slug) {
+        Ok(()) => {
+            app.profiles.active = Some(app.active_profile.clone());
+            app.refresh_profiles();
+            app.notify(Level::Good, format!("rede '{slug}' removida"));
+        }
+        Err(err) => app.notify(Level::Error, format!("não foi possível remover: {err}")),
+    }
 }
 
 #[cfg(test)]

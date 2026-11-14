@@ -36,6 +36,12 @@ pub struct AgentConfig {
     pub force_relay: bool,
     /// Serviços loopback expostos no endereço overlay do nó.
     pub expose: Vec<ExposeSpec>,
+    /// Identidade de exibição enviada no enrollment; nunca usada como ACL.
+    pub display_name: Option<String>,
+    /// Nota curta exibida ao lado da identidade.
+    pub about: Option<String>,
+    /// Desktop helper runs network plumbing only, never extension programs.
+    pub disable_extensions: bool,
 }
 
 impl AgentConfig {
@@ -51,6 +57,9 @@ impl AgentConfig {
             labels: BTreeMap::new(),
             force_relay: false,
             expose: Vec::new(),
+            display_name: None,
+            about: None,
+            disable_extensions: false,
         }
     }
 
@@ -100,6 +109,11 @@ pub struct NodeState {
     #[serde(default)]
     pub expose: Vec<ExposeSpec>,
     pub created_at: DateTime<Utc>,
+    /// Presentation identity. Kept locally so the TUI can show it offline.
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub about: String,
 }
 
 impl NodeState {
@@ -216,6 +230,8 @@ pub async fn join(
         labels: cfg.labels.clone(),
         tags: cfg.tags.clone(),
         nat_type: NatType::Unknown,
+        display_name: cfg.display_name.clone().unwrap_or_default().trim().to_string(),
+        about: cfg.about.clone().unwrap_or_default().trim().to_string(),
     };
     let client = ControlClient::new(control_url)?;
     let res: EnrollResponse = client.enroll(&req).await?;
@@ -231,6 +247,8 @@ pub async fn join(
         network_name: res.network_name,
         expose: cfg.expose.clone(),
         created_at: Utc::now(),
+        display_name: cfg.display_name.clone().unwrap_or_default().trim().to_string(),
+        about: cfg.about.clone().unwrap_or_default().trim().to_string(),
     };
     state.save(&cfg.state_path())?;
     Ok(state)

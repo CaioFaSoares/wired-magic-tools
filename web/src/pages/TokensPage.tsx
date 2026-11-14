@@ -80,6 +80,7 @@ export function TokensPage() {
   const [ttlUnit, setTtlUnit] = useState<TtlUnit>("hours");
   const [maxUses, setMaxUses] = useState("1");
   const [tags, setTags] = useState("");
+  const [requireApproval, setRequireApproval] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [created, setCreated] = useState<JoinTokenView | null>(null);
   const [controlUrl, setControlUrl] = useState(defaultControlUrl());
@@ -95,6 +96,7 @@ export function TokensPage() {
       setName("convite");
       setTags("");
       setMaxUses("1");
+      setRequireApproval(false);
     },
   });
 
@@ -151,6 +153,7 @@ export function TokensPage() {
       max_uses: uses,
       tags: parsedTags,
       labels: {},
+      require_approval: requireApproval,
     });
   }
 
@@ -280,6 +283,25 @@ export function TokensPage() {
                   disabled={createMutation.isPending}
                 />
               </Field>
+
+              <label className="flex items-start gap-2.5 rounded-lg border border-line bg-black/20 px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  checked={requireApproval}
+                  onChange={(event) => setRequireApproval(event.target.checked)}
+                  disabled={createMutation.isPending}
+                  className="mt-0.5 size-3.5 accent-[color:var(--accent)]"
+                />
+                <span>
+                  <span className="block text-[11px] font-medium text-ink">
+                    Exigir aprovação do administrador
+                  </span>
+                  <span className="mt-0.5 block text-[10px] leading-4 text-faint">
+                    Desligado (padrão): o convite sozinho já inscreve o nó. Ligado: cada nó
+                    entra como pendente até ser aprovado.
+                  </span>
+                </span>
+              </label>
 
               {formError || createMutation.isError ? (
                 <p role="alert" className="rounded-md border border-danger/30 bg-danger/[0.07] px-3 py-2 text-xs leading-5 text-danger">

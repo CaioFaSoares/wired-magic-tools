@@ -19,9 +19,10 @@ use uuid::Uuid;
 use x25519_dalek::StaticSecret;
 
 use wm_proto::{
-    AgentStatus, CompiledAcl, ControlEvent, EndpointCandidate, EndpointKind, EndpointsRequest,
-    ExtensionDesired, ExtensionStatus, NatType, NetworkMap, NodeId, PathKind, PeerInfo, PeerStats,
-    PeerStatus, PingResult, RelayFrame, RelayInfo, ReportRequest, SelfInfo, ShareInfo,
+    AgentRuntime, AgentStatus, CompiledAcl, ControlEvent, EndpointCandidate, EndpointKind,
+    EndpointsRequest, ExtensionDesired, ExtensionStatus, NatType, NetworkMap, NodeCompliance,
+    NodeId, NodeRequirements, PathKind, PeerInfo, PeerStats, PeerStatus, PingResult, RelayFrame,
+    RelayInfo, ReportRequest, SelfInfo, ShareInfo,
 };
 
 use crate::control::{ControlClient, ControlError};
@@ -44,6 +45,7 @@ pub(crate) enum Cmd {
     RelayConnected(bool),
     NatType(NatType),
     Timer,
+    Shutdown,
     Ping {
         peer: String,
         reply: oneshot::Sender<Result<PingResult, String>>,
@@ -183,6 +185,10 @@ struct DataPlane {
     pending_pings: HashMap<(u16, u16), PendingPing>,
     flows: HashMap<FlowKey, FlowEntry>,
     force_relay: bool,
+    display_name: String,
+    about: String,
+    requirements: NodeRequirements,
+    compliance: NodeCompliance,
 }
 
 impl DataPlane {
@@ -196,6 +202,19 @@ impl DataPlane {
                 tracing::warn!(%err, "não foi possível persistir o novo nome do nó");
             }
         }
+        if self.state.display_name != map.me.display_name || self.state.about != map.me.about {
+            self.state.display_name = map.me.display_name.clone();
+            self.state.about = map.me.about.clone();
+            if let Err(err) = self.state.save(&self.state_path) {
+                tracing::warn!(%err, "não foi possível persistir o perfil do nó");
+            }
+        }
+        if self.display_name != map.me.display_name {
+            self.display_name = map.me.display_name.clone();
+        }
+        self.about = map.me.about.clone();
+        self.requirements = map.requirements.clone();
+        self.compliance = map.compliance.clone();
         self.engine.apply_peers(&map.peers);
         self.acl = map.acl;
         revalidate_flows(&mut self.flows, &self.acl);
@@ -715,6 +734,8 @@ impl DataPlane {
                 tx_bytes: stats.as_ref().map(|s| s.1).unwrap_or(0),
                 relay_online: peer.relay_online,
                 last_error: peer.last_error.clone(),
+                display_name: peer.display_name.clone(),
+                about: peer.about.clone(),
             });
         }
         peers.sort_by_key(|p| p.overlay_ip);
@@ -738,6 +759,10 @@ impl DataPlane {
             uptime_secs: self.started.elapsed().as_secs(),
             map_version: self.map_version,
             last_error: self.last_error.clone(),
+            display_name: self.display_name.clone(),
+            about: self.about.clone(),
+            requirements: self.requirements.clone(),
+            compliance: self.compliance.clone(),
         };
         let mut peer_ips = BTreeMap::new();
         for p in &peers {
@@ -776,8 +801,10 @@ pub async fn run_until(cfg: AgentConfig, shutdown: oneshot::Receiver<()>) -> any
     // Node-side hook assets (scripts) are bundled with the binary. The control
     // seeds its own data dir; the agent must have them too, including on remote
     // nodes that never share a filesystem with the control.
-    if let Err(err) = wm_ext::seed_builtin_manifests(&cfg.data_dir.join("extensions")) {
-        tracing::warn!(%err, "não foi possível semear assets de extensões no nó");
+    if !cfg.disable_extensions {
+        if let Err(err) = wm_ext::seed_builtin_manifests(&cfg.data_dir.join("extensions")) {
+            tracing::warn!(%err, "não foi possível semear assets de extensões no nó");
+        }
     }
     let pid_path = cfg.pid_path();
     std::fs::write(&pid_path, format!("{}\n", std::process::id()))?;
@@ -886,17 +913,37 @@ async fn run_inner(
         data_dir: cfg.data_dir.clone(),
         extensions_dir: cfg.data_dir.join("extensions"),
     };
-    tasks.push(tokio::spawn(crate::extensions::run(
-        extensions_rx,
-        extension_status_tx,
-        cfg.data_dir.join("extensions"),
-        hook_ctx,
-    )));
+    if !cfg.disable_extensions {
+        tasks.push(tokio::spawn(crate::extensions::run(
+            extensions_rx,
+            extension_status_tx,
+            cfg.data_dir.join("extensions"),
+            hook_ctx,
+        )));
+    }
+    let report_runtime = AgentRuntime {
+        udp_port: Some(udp_port),
+        mtu: Some(cfg.mtu),
+        force_relay: Some(cfg.force_relay),
+        expose: cfg
+            .expose
+            .iter()
+            .map(|spec| {
+                if spec.overlay_port == spec.local_port {
+                    spec.overlay_port.to_string()
+                } else {
+                    format!("{}:{}", spec.overlay_port, spec.local_port)
+                }
+            })
+            .collect(),
+        tun_name: Some(tun_name.clone()),
+    };
     tasks.push(tokio::spawn(report_loop(
         control.clone(),
         state.node_token.clone(),
         snapshot.clone(),
         extension_status_rx.clone(),
+        report_runtime,
     )));
     tasks.push(tokio::spawn(discovery_loop(
         socket.clone(),
@@ -966,6 +1013,10 @@ async fn run_inner(
         pending_pings: HashMap::new(),
         flows: HashMap::new(),
         force_relay: cfg.force_relay,
+        display_name: cfg.display_name.clone().unwrap_or_default(),
+        about: cfg.about.clone().unwrap_or_default(),
+        requirements: NodeRequirements::default(),
+        compliance: NodeCompliance::default(),
     };
 
     tokio::select! {
@@ -987,6 +1038,7 @@ async fn run_inner(
 async fn data_loop(plane: &mut DataPlane, mut rx: mpsc::Receiver<Cmd>) {
     while let Some(cmd) = rx.recv().await {
         match cmd {
+            Cmd::Shutdown => break,
             Cmd::Tun(packet) => plane.on_tun(packet).await,
             Cmd::Udp { data, from } => plane.on_udp(data, from).await,
             Cmd::Relay { from, data } => plane.on_relay(from, data).await,
@@ -1118,6 +1170,7 @@ async fn report_loop(
     token: String,
     snapshot: Arc<RwLock<AgentSnapshot>>,
     mut extension_status: watch::Receiver<Vec<ExtensionStatus>>,
+    runtime: AgentRuntime,
 ) {
     tokio::time::sleep(Duration::from_secs(5)).await;
     let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -1162,6 +1215,8 @@ async fn report_loop(
             nat_type,
             relay_connected,
             extensions,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            agent: runtime.clone(),
         };
         if let Err(err) = control.post_report(&token, &req).await {
             tracing::debug!(%err, "relatório não enviado");
@@ -1268,6 +1323,10 @@ fn initial_snapshot(state: &NodeState, tun_name: &str, udp_port: u16) -> AgentSn
             uptime_secs: 0,
             map_version: 0,
             last_error: None,
+            display_name: state.display_name.clone(),
+            about: state.about.clone(),
+            requirements: NodeRequirements::default(),
+            compliance: NodeCompliance::default(),
         },
         peers: Vec::new(),
         shares: Vec::new(),

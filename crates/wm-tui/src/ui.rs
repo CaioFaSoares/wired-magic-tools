@@ -11,7 +11,7 @@ use wm_proto::{PathKind, ShareKind};
 use crate::actions;
 use crate::app::{
     App, FieldKind, Level, MouseAction, TAB_AGENT, TAB_CONSOLE, TAB_EXTENSIONS, TAB_HELP,
-    TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS, TAB_TOPOLOGY,
+    TAB_NETWORKS, TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS, TAB_TOPOLOGY,
 };
 
 const BORDER: Color = Color::DarkGray;
@@ -38,6 +38,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_tabs(frame, chunks[1], app);
     match app.tab {
         TAB_STATUS => draw_status(frame, chunks[2], app),
+        TAB_NETWORKS => draw_networks(frame, chunks[2], app),
         TAB_PEERS => draw_peers(frame, chunks[2], app),
         TAB_SHARES => draw_shares(frame, chunks[2], app),
         TAB_TOPOLOGY => draw_topology(frame, chunks[2], app),
@@ -61,12 +62,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
-    let name = app
+    let technical = app
         .status
         .as_ref()
         .and_then(|status| status.node_name.clone())
         .or_else(|| app.node.as_ref().map(|node| node.node_name.clone()))
         .unwrap_or_else(|| "wired-magic".into());
+    let display = app
+        .status
+        .as_ref()
+        .map(|status| status.display_name.clone())
+        .or_else(|| app.node.as_ref().map(|node| node.display_name.clone()))
+        .unwrap_or_default();
+    let name = if display.trim().is_empty() {
+        technical.clone()
+    } else {
+        display.trim().to_string()
+    };
     let ip = app
         .status
         .as_ref()
@@ -248,6 +260,15 @@ fn action_bar_specs(app: &App) -> Vec<ButtonSpec> {
                 specs.push(button("GUI", MouseAction::OpenGui));
                 specs.push(button("Painel", MouseAction::AdminPanel));
             }
+        }
+        TAB_NETWORKS => {
+            specs.push(button("Entrar", MouseAction::SwitchProfile));
+            specs.push(button("Nova", MouseAction::NewProfile));
+            specs.push(button("Iniciar", MouseAction::StartProfile));
+            specs.push(button("Parar", MouseAction::StopProfile));
+            specs.push(button("Renomear", MouseAction::RenameProfile));
+            specs.push(button("Remover", MouseAction::RemoveProfile));
+            specs.push(button("Perfil", MouseAction::Profile));
         }
         TAB_PEERS => {
             specs.push(button("Ping", MouseAction::Ping));
@@ -529,7 +550,11 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::Red),
             )));
             lines.push(Line::from(Span::styled(
-                "se o nó já está inscrito, reabra com sudo wm tui",
+                if app.desktop_root.is_some() {
+                    "macOS: s conecta ao nó root já inscrito com autorização nativa; UI sem sudo"
+                } else {
+                    "se o nó já está inscrito, reabra com sudo wm tui"
+                },
                 Style::default().fg(Color::Yellow),
             )));
             lines.push(Line::from(""));
@@ -541,19 +566,33 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
-        lines.push(Line::from("  1. peça um convite ao administrador (código wmc_…)"));
-        lines.push(Line::from("  2. pressione j e cole o código, ou informe URL + token"));
-        lines.push(Line::from("  3. a TUI inscreve, inicia o agente e mantém a conexão"));
-        lines.push(Line::from("     ativa mesmo depois de sair com q"));
+        if app.desktop_root.is_some() {
+            lines.push(Line::from("  s conecta ao nó root já inscrito; autorização nativa se necessário"));
+            lines.push(Line::from("  enrollment inicial root ainda não implementado neste fluxo"));
+            lines.push(Line::from("  q fecha apenas a UI; o daemon continua em segundo plano"));
+        } else {
+            lines.push(Line::from("  1. peça um convite ao administrador (código wmc_…)"));
+            lines.push(Line::from("  2. pressione j e cole o código, ou informe URL + token"));
+            lines.push(Line::from("  3. a TUI inscreve, inicia o agente e mantém a conexão"));
+            lines.push(Line::from("     ativa mesmo depois de sair com q"));
+        }
         lines.push(Line::from(""));
         if !actions::is_root() {
             lines.push(Line::from(Span::styled(
-                "sem root: iniciar o agente exige root (use sudo wm tui)",
+                if app.desktop_root.is_some() {
+                    "macOS: s solicita autorização nativa; a UI permanece sem sudo"
+                } else {
+                    "sem root: iniciar o agente exige root (use sudo wm tui)"
+                },
                 Style::default().fg(Color::Yellow),
             )));
         }
         lines.push(Line::from(Span::styled(
-            "atalhos: j entrar · :comando · ? ajuda · q sair (nada é iniciado)",
+            if app.desktop_root.is_some() {
+                "atalhos: s conectar/autorizar · :comando · ? ajuda · q sair"
+            } else {
+                "atalhos: j entrar · :comando · ? ajuda · q sair (nada é iniciado)"
+            },
             Style::default().fg(Color::DarkGray),
         )));
     } else if let Some(status) = &app.status {
@@ -569,6 +608,17 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                     .unwrap_or_else(|| "—".into())
             ),
         ));
+        lines.push(kv(
+            "aparece como",
+            if status.display_name.trim().is_empty() {
+                "— (outros veem o nome técnico)".to_string()
+            } else {
+                status.display_name.clone()
+            },
+        ));
+        if !status.about.trim().is_empty() {
+            lines.push(kv("descrição", status.about.clone()));
+        }
         lines.push(kv(
             "overlay",
             status
@@ -614,6 +664,23 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         ));
         lines.push(kv("mapa", format!("v{}", status.map_version)));
         lines.push(kv("uptime", format!("{}s", status.uptime_secs)));
+        if !status.requirements.is_empty() {
+            let (label, style) = if status.compliance.compliant {
+                ("conforme", Style::default().fg(Color::Green))
+            } else {
+                ("não conforme", Style::default().fg(Color::Red))
+            };
+            lines.push(Line::from(vec![
+                Span::styled("exigências do servidor ", Style::default().fg(Color::DarkGray)),
+                Span::styled(label, style),
+            ]));
+            for check in status.compliance.checks.iter().filter(|check| !check.ok).take(4) {
+                lines.push(Line::from(Span::styled(
+                    format!("  ✗ {}: {}", check.label, check.detail),
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        }
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::raw("control "),
@@ -680,7 +747,11 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
         if !actions::is_root() {
             lines.push(Line::from(Span::styled(
-                "sem root: visualizar funciona; iniciar/parar exige sudo wm tui",
+                if app.desktop_root.is_some() {
+                    "macOS: s solicita autorização nativa; UI sem sudo; parada via API (legados podem não suportar)"
+                } else {
+                    "sem root: visualizar funciona; iniciar/parar exige sudo wm tui"
+                },
                 Style::default().fg(Color::Yellow),
             )));
         }
@@ -690,6 +761,121 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(" Estado ")), area);
+}
+
+fn draw_networks(frame: &mut Frame, area: Rect, app: &mut App) {
+    let active = app.active_profile.clone();
+    let header = Row::new(vec![
+        "Rede", "Você aparece como", "Nó técnico", "Overlay", "Control", "Agente", "Exigências",
+    ])
+    .style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
+    let rows: Vec<Row> = app
+        .profile_status
+        .iter()
+        .map(|status| {
+            let is_active = status.slug == active;
+            let mut label = format!("{} {}", if is_active { "●" } else { " " }, status.label);
+            if status.conflict.is_some() {
+                label.push_str(" ⚠");
+            }
+            let label_style = if status.conflict.is_some() {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else if is_active {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let identity = if status.display_name.trim().is_empty() {
+                "—".to_string()
+            } else if status.about.trim().is_empty() {
+                status.label_name().to_string()
+            } else {
+                format!("{} — {}", status.label_name(), status.about)
+            };
+            let agent = if let Some(error) = &status.node_error {
+                Span::styled(
+                    format!("erro: {}", crate::app::truncate_text(error, 18)),
+                    Style::default().fg(Color::Red),
+                )
+            } else if status.running {
+                Span::styled(
+                    status
+                        .pid
+                        .map(|pid| format!("ativo:{pid}"))
+                        .unwrap_or_else(|| "ativo".into()),
+                    Style::default().fg(Color::Green),
+                )
+            } else if status.enrolled {
+                Span::styled("parado", Style::default().fg(Color::Yellow))
+            } else {
+                Span::styled("sem inscrição", Style::default().fg(Color::DarkGray))
+            };
+            let requirements = match (&status.compliance, status.enrolled) {
+                (Some(compliance), _) if !compliance.checks.is_empty() => {
+                    if compliance.compliant {
+                        Span::styled("conforme", Style::default().fg(Color::Green))
+                    } else {
+                        Span::styled("não conforme", Style::default().fg(Color::Red))
+                    }
+                }
+                _ => Span::styled("—", Style::default().fg(Color::DarkGray)),
+            };
+            Row::new(vec![
+                Cell::from(label).style(label_style),
+                Cell::from(identity),
+                Cell::from(if status.node_name.is_empty() {
+                    "—".to_string()
+                } else {
+                    status.node_name.clone()
+                }),
+                Cell::from(if status.overlay_ip.is_empty() {
+                    "—".to_string()
+                } else {
+                    format!("{} · {}", status.overlay_ip, status.overlay_cidr)
+                }),
+                Cell::from(status.control_url.clone()),
+                Cell::from(agent),
+                Cell::from(requirements),
+            ])
+        })
+        .collect();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(18),
+            Constraint::Length(20),
+            Constraint::Length(14),
+            Constraint::Min(20),
+            Constraint::Min(18),
+            Constraint::Length(11),
+            Constraint::Length(12),
+        ],
+    )
+    .header(header)
+    .row_highlight_style(Style::default().bg(HIGHLIGHT).add_modifier(Modifier::BOLD))
+    .highlight_symbol("▸ ")
+    .block(block(&format!(
+        "Redes ({}) · ativa: {}",
+        app.profile_status.len(),
+        app.profiles
+            .find(&active)
+            .map(|entry| entry.label.as_str())
+            .unwrap_or(&active)
+    )));
+    frame.render_stateful_widget(table, area, &mut app.profiles_table);
+    let offset = app.profiles_table.offset();
+    let count = app.profile_status.len();
+    register_table_rows(app, area, offset, count, MouseAction::SelectProfile);
+
+    if app.profile_status.is_empty() {
+        empty_message(frame, area, "nenhuma rede local; pressione n para criar");
+    }
 }
 
 fn draw_peers(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -710,8 +896,13 @@ fn draw_peers(frame: &mut Frame, area: Rect, app: &mut App) {
                 PathKind::Relay => Style::default().fg(Color::Yellow),
                 PathKind::None => Style::default().fg(Color::DarkGray),
             };
+            let label = if peer.display_name.trim().is_empty() {
+                peer.name.clone()
+            } else {
+                format!("{} ({})", peer.display_name, peer.name)
+            };
             Row::new(vec![
-                Cell::from(peer.name.clone()),
+                Cell::from(label),
                 Cell::from(peer.overlay_ip.to_string()),
                 Cell::from(peer.path.to_string()).style(path_style),
                 Cell::from(peer.endpoint.clone().unwrap_or_else(|| "—".into())),
@@ -1355,6 +1546,8 @@ fn draw_services(frame: &mut Frame, area: Rect, app: &mut App) {
             "root",
             if actions::is_root() {
                 "sim"
+            } else if app.desktop_root.is_some() {
+                "não — UI sem sudo; s autoriza helper nativo; serviço launchd não instalado"
             } else {
                 "não — iniciar/instalar exige sudo wm tui"
             },
@@ -1567,6 +1760,18 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::from("  sem inscrição:      j → cole o código wmc_ (ou URL + token)"),
         Line::from("  inscrito, parado:   s inicia o agente em segundo plano"),
         Line::from("  inscrito, ativo:    a tela se atualiza sozinha; n renomeia o nó"),
+        Line::from("  identidade:         p abre \"Meu perfil\" (nome de exibição e descrição)"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "redes e perfis (aba Redes)",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("  cada rede tem data-dir, agente, socket e identidade próprios"),
+        Line::from("  Enter troca a rede ativa · n cria outra · s/x inicia ou para"),
+        Line::from("  r renomeia o rótulo local · d remove (só sem agente ativo)"),
+        Line::from("  agentes de outras redes continuam rodando em segundo plano"),
+        Line::from("  sobreposição de overlay entre redes ativas é sinalizada com ⚠"),
         Line::from(""),
         Line::from(Span::styled(
             "agente",
@@ -1608,7 +1813,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::from("  n (Peers/Início): renomear este nó"),
         Line::from(""),
         Line::from(Span::styled(
-            "console (aba 8 ou :)",
+            "console (aba 9 ou :)",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -1743,6 +1948,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 " s iniciar · X parar · R reiniciar · e ajustes · a auto · g GUI · ? ajuda"
             }
         }
+        TAB_NETWORKS => " Enter trocar · n nova rede · s/x iniciar/parar · r renomear · d remover · p perfil",
         TAB_PEERS => " p ping · o probe · x reconectar · c copiar · n renomear nó · ? ajuda",
         TAB_SHARES => " n publicar · Enter abrir · c copiar · r renomear · e on/off · d remover",
         TAB_TOPOLOGY => " Tab abas · ? ajuda · q sair (agente continua)",
@@ -1765,7 +1971,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 }
 
-fn draw_extension_tab(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_extension_tab(frame: &mut Frame, area: Rect, app: &mut App) {
+    if app
+        .selected_extension_tab()
+        .is_some_and(|tab| tab.spec.mode == wm_proto::TuiMode::Pane)
+    {
+        draw_pane(frame, area, app);
+        return;
+    }
     let Some(tab) = app.selected_extension_tab() else {
         return;
     };
@@ -1865,6 +2078,67 @@ fn draw_extension_tab(frame: &mut Frame, area: Rect, app: &App) {
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn draw_pane(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(tab) = app.selected_extension_tab() else {
+        return;
+    };
+    let id = tab.id.clone();
+    let title = tab.title.clone();
+    if let Some(error) = app.pane_errors.get(&id) {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    format!("não foi possível abrir a TUI de {title}"),
+                    Style::default().fg(Color::Red),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(error.clone(), Style::default().fg(Color::Gray))),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter tenta de novo · Tab muda de aba",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ])
+            .block(block(format!(" {title} ")))
+            .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+    let Some(pane) = app.panes.get_mut(&id) else {
+        frame.render_widget(
+            Paragraph::new("iniciando a TUI da extensão…")
+                .block(block(format!(" {title} "))),
+            area,
+        );
+        return;
+    };
+    pane.resize(area.height, area.width);
+    pane.poll();
+    pane.render(frame, area);
+    if pane.exited {
+        let message = format!(
+            " {} encerrado ({}) · Enter reinicia · Tab muda de aba ",
+            title,
+            pane.exit.as_deref().unwrap_or("fim")
+        );
+        let status = Rect {
+            x: area.x,
+            y: area.bottom().saturating_sub(1),
+            width: area.width,
+            height: 1,
+        };
+        frame.render_widget(Clear, status);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(&message, area.width as usize),
+                Style::default().bg(Color::Red).fg(Color::White),
+            ))),
+            status,
+        );
+    }
 }
 
 fn draw_form(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -2251,6 +2525,9 @@ mod tests {
         let mut app = App::load(root);
         let node_id = Uuid::new_v4();
         app.node = Some(crate::persist::EnrolledNode {
+            overlay_cidr: String::new(),
+            display_name: String::new(),
+            about: String::new(),
             node_name: "studio".into(),
             overlay_ip: "10.66.0.1".into(),
             control_url: "https://mesh.exemplo.com".into(),
@@ -2258,6 +2535,10 @@ mod tests {
             created_at: Some(chrono::Utc::now()),
         });
         app.status = Some(AgentStatus {
+            display_name: String::new(),
+            about: String::new(),
+            requirements: Default::default(),
+            compliance: Default::default(),
             version: "0.1.0".into(),
             node_id: Some(node_id),
             node_name: Some("studio".into()),
@@ -2278,6 +2559,8 @@ mod tests {
         app.cached_at = Some(chrono::Utc::now());
         app.peers = vec![
             PeerStatus {
+                display_name: String::new(),
+                about: String::new(),
                 id: Uuid::new_v4(),
                 name: "mac-01".into(),
                 overlay_ip: "10.66.0.12".parse().unwrap(),
@@ -2291,6 +2574,8 @@ mod tests {
                 last_error: None,
             },
             PeerStatus {
+                display_name: String::new(),
+                about: String::new(),
                 id: Uuid::new_v4(),
                 name: "mac-02".into(),
                 overlay_ip: "10.66.0.13".parse().unwrap(),
@@ -2632,6 +2917,7 @@ mod tests {
                     command: "{wm}".into(),
                     args: vec!["chat".into()],
                     refresh_secs: 2,
+                    options: Default::default(),
                 }),
                 ..base_extension_view("chat")
             },
@@ -2644,6 +2930,7 @@ mod tests {
                     command: "/bin/true".into(),
                     args: Vec::new(),
                     refresh_secs: 2,
+                    options: Default::default(),
                 }),
                 ..base_extension_view("panel")
             },

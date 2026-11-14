@@ -169,21 +169,22 @@ Uma extensão pode declarar uma aba na TUI:
 ```toml
 [tui]
 tab = "Minha aba"
-mode = "snapshot"       # ou "exec" para uma TUI de tela cheia
+mode = "pane"           # pane | snapshot | exec
 command = "{extension_dir}/panel.sh"
 refresh_secs = 5
 ```
 
+- `mode = "pane"` roda a extensão dentro de um **PTY embutido** no corpo da
+  TUI. O wm empresta o terminal e encaminha as teclas; a extensão desenha a
+  interface que precisar. `Tab`/`Shift+Tab` troca de aba; se o processo sair,
+  `Enter` reinicia. É o modo usado por `chat` (`wm chat`) e `debug`.
 - `mode = "snapshot"` executa o comando periodicamente e renderiza o JSON
   `wm-proto::TuiDocument` (título, seções de texto/tabela, rodapé).
-- `mode = "exec"` suspende a TUI principal e abre a interface de tela cheia
-  (ex.: `wm chat`, `wm debug`); ao sair, a TUI volta na mesma aba.
+- `mode = "exec"` suspende a TUI principal e abre a interface de tela cheia.
 - `{wm}` vira o binário atual; `{extension_dir}` vira o diretório local da
-  extensão. O comando recebe `WM_EXTENSION_ID`, `WM_DATA_DIR` e `WM_TUI=1`.
-- Exemplo completo: [`examples/extensions/tui-panel`](../examples/extensions/tui-panel).
-
-`chat` e `debug` já declaram abas `exec`; por isso aparecem em cima e também
-podem ser usados como `wm chat`/`wm debug` independentes.
+  extensão; `{option:chave}` vira uma opção de `[tui.options]`. O comando recebe
+  `WM_EXTENSION_ID`, `WM_DATA_DIR` e `WM_TUI=1` (`WM_TUI_PANE=1` no pane).
+- Exemplo completo de snapshot: [`examples/extensions/tui-panel`](../examples/extensions/tui-panel).
 
 ## Criar uma extensão
 

@@ -93,7 +93,9 @@ Contagens de nós, online/pendentes, pares direct/relay, relay conectado, uptime
 
 ### `GET /api/v1/admin/nodes`
 
-Lista de `NodeView` (PeerInfo + status, created/approved/disabled, nat, relay, reported_peers).
+Lista de `NodeView` (PeerInfo + status, created/approved/disabled, nat, relay, reported_peers,
+`requirements` e `compliance`). `PeerInfo` carrega `display_name`/`about`: apresentação, nunca
+identidade de ACL.
 
 ### `PATCH /api/v1/admin/nodes/{id}` (CSRF)
 
@@ -102,6 +104,21 @@ Lista de `NodeView` (PeerInfo + status, created/approved/disabled, nat, relay, r
 ```
 
 Recompila a ACL ativa quando nome/tags/status mudam.
+
+### `PUT /api/v1/admin/nodes/{id}/requirements` (CSRF)
+
+Substitui as exigências do nó. Corpo é um `NodeRequirements`; objeto vazio limpa a política:
+
+```json
+{"min_version":"0.2.0","required_extensions":["cloudflared"],
+ "required_tags":["mac"],
+ "agent":{"udp_port":41641,"mtu":1400,"force_relay":false,
+          "expose":["3000"],"tun_name":"utun9"}}
+```
+
+Campos são opcionais (`null`/ausente = sem exigência). A resposta traz `compliance` recalculada
+com o último relatório observado. Conformidade é publicada no `NodeView`/mapa e **não**
+desconecta o nó automaticamente.
 
 ### `POST /api/v1/admin/nodes/{id}/approve` (CSRF)
 
@@ -112,7 +129,9 @@ Revoga: status disabled, tokens revogados, conexão de relay removida, ACL recom
 ### Join tokens
 
 - `GET /api/v1/admin/join-tokens`
-- `POST` (CSRF): `{"name":"lab","ttl_secs":3600,"max_uses":10,"tags":["mac"]}` → token em claro
+- `POST` (CSRF): `{"name":"lab","ttl_secs":3600,"max_uses":10,"tags":["mac"],
+  "require_approval":false}` → token em claro. `require_approval` é opcional e, quando
+  verdadeiro, coloca os nós desse convite em `pending` até aprovação; o padrão é só o convite.
   **uma vez**.
 - `DELETE /api/v1/admin/join-tokens/{id}` (CSRF)
 
@@ -183,7 +202,11 @@ Autenticado pelo token do nó (`Authorization: Bearer wmn_...`):
 - `PATCH /api/v1/node/shares/{id}` — campos parciais (`name`, `port`, `kind`,
   `protocol`, `description`, `enabled`); só o dono.
 - `DELETE /api/v1/node/shares/{id}` — só o dono.
-- `PATCH /api/v1/node/self` — `{"name":"novo-nome"}` renomeia o nó.
+- `PATCH /api/v1/node/self` — `{"name":"novo-nome"}` renomeia o nó (identidade técnica/ACL).
+- `PATCH /api/v1/node/profile` — `{"display_name":"Caio","about":"rack da sala"}` define a
+  identidade de exibição. Vazio limpa o perfil; control chars e tamanhos excessivos são 400.
+- `POST /api/v1/node/report` — além de peers/extensões, envia `version` e `agent`
+  (`udp_port`, `mtu`, `force_relay`, `expose`, `tun_name`) usados na conformidade.
 
 Admin (cookie + CSRF nas mutações):
 

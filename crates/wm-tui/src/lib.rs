@@ -7,11 +7,15 @@
 //! touches WireGuard or the network directly.
 
 mod actions;
+pub mod authorization;
+mod desktop;
 mod agent;
 mod app;
 mod catalog;
+mod pane;
 mod command;
 mod persist;
+mod profiles;
 mod ui;
 #[cfg(any(target_os = "macos", test))]
 mod updater;
@@ -42,17 +46,23 @@ use wm_proto::{
 use crate::agent::{AgentEvent, JobEvent};
 use crate::app::{
     App, FieldKind, Level, Menu, MenuItem, MouseAction, TAB_AGENT, TAB_CONSOLE,
-    TAB_EXTENSIONS, TAB_HELP, TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS,
+    TAB_EXTENSIONS, TAB_HELP, TAB_NETWORKS, TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS,
 };
 use crate::persist::EnrolledNode;
 
 /// Options for one TUI session.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RunOptions {
     /// Do not start the agent automatically when this node is already enrolled.
     pub no_auto_start: bool,
     /// Do not capture mouse events (keeps native terminal selection available).
     pub no_mouse: bool,
+    /// Profile to open. When absent, the last active profile is used. An
+    /// unknown name creates the profile on first use.
+    pub profile: Option<String>,
+    /// Root-owned node served through the macOS authorized bridge. UI state
+    /// remains in the separate user registry passed to run_with.
+    pub desktop_root: Option<PathBuf>,
 }
 
 /// One poll of the local agent, including the agent's own log tail.
@@ -75,6 +85,8 @@ pub enum Msg {
     Console(Level, String),
     Agent(AgentEvent),
     Job(JobEvent),
+    PaneData { id: String, bytes: Vec<u8> },
+    PaneClosed { id: String },
     Joined(Option<EnrolledNode>),
     CommandFinished {
         pid: u32,
@@ -146,16 +158,85 @@ pub fn run(data_dir: PathBuf) -> anyhow::Result<()> {
 
 /// Runs the TUI until `q`. The agent process, however, is deliberately left
 /// running (detached) and reconnects on the next session.
+///
+/// The data directory is the *registry* root: it holds `profiles.json` and the
+/// `profiles/` tree. The legacy layout (data dir == node dir) is the `default`
+/// profile, so existing installations keep working. Switching profiles tears
+/// down this screen session and reopens it on another profile; running agents
+/// are not touched.
 pub fn run_with(data_dir: PathBuf, options: RunOptions) -> anyhow::Result<()> {
     // Detached children inherit the working directory, but an absolute root
     // keeps the TUI and the agent on the same data even if a shell changes it.
-    let data_dir = if data_dir.is_absolute() {
+    let registry_root = if data_dir.is_absolute() {
         data_dir
     } else {
         std::env::current_dir()?.join(data_dir)
     };
-    persist::ensure_dir(&data_dir)?;
-    let mut app = App::load(data_dir);
+    persist::ensure_dir(&registry_root)?;
+    let (mut registry, mut warning) = profiles::load(&registry_root);
+    let mut slug = options
+        .profile
+        .clone()
+        .unwrap_or_else(|| registry.active_slug().to_string());
+    if registry.find(&slug).is_none() {
+        // `wm tui --profile amigos` creates the profile on first use.
+        let entry = registry
+            .create(&slug, &slug)
+            .map_err(|err| anyhow::anyhow!("perfil '{slug}': {err}"))?;
+        profiles::ensure_profile_dir(&registry_root, &entry)?;
+        registry.active = Some(entry.slug.clone());
+        profiles::save(&registry_root, &registry)?;
+        slug = entry.slug;
+    }
+    let mut open_join = false;
+    let (final_app, saved) = loop {
+        let entry = registry
+            .find(&slug)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("perfil '{slug}' desapareceu do registro"))?;
+        let root = profiles::ensure_profile_dir(&registry_root, &entry)?;
+        let mut app = App::load(root);
+        if slug == profiles::LEGACY_SLUG {
+            if let Some(daemon_root) = &options.desktop_root {
+                app.desktop_root = Some(daemon_root.clone());
+                app.socket = desktop::socket();
+                app.node = None;
+                app.node_error = None;
+            }
+        }
+        app.set_profile_context(&registry_root, registry.clone(), slug.clone());
+        if let Some(warning) = warning.take() {
+            app.notify(Level::Warn, warning);
+        }
+        app.pending_join = open_join;
+        let saved = run_session(&mut app, &options)?;
+        let pending = app.pending_switch.clone();
+        registry = app.profiles.clone();
+        // Persist the profile that will be active next: after a switch the
+        // session loop reopens with `next`, not with the profile just closed.
+        registry.active = Some(
+            pending
+                .as_ref()
+                .map(|(next, _)| next.clone())
+                .unwrap_or_else(|| slug.clone()),
+        );
+        registry.ensure_legacy();
+        if let Err(err) = profiles::save(&registry_root, &registry) {
+            eprintln!("aviso: não foi possível salvar profiles.json: {err}");
+        }
+        match pending {
+            Some((next, join)) => {
+                slug = next;
+                open_join = join;
+            }
+            None => break (app, saved),
+        }
+    };
+    print_summary(&final_app, saved);
+    Ok(())
+}
+
+fn run_session(app: &mut App, options: &RunOptions) -> anyhow::Result<bool> {
     let (tx, rx) = mpsc::channel();
     start_fetcher(
         app.root.clone(),
@@ -172,24 +253,27 @@ pub fn run_with(data_dir: PathBuf, options: RunOptions) -> anyhow::Result<()> {
         Level::Info,
         "TUI pronta — q sai e mantém o agente ativo em segundo plano",
     );
-    maybe_auto_start(&mut app, &tx, options.no_auto_start);
+    if app.pending_join {
+        app.pending_join = false;
+        app.form = Some(app::join_form());
+    }
+    maybe_auto_start(app, &tx, options.no_auto_start);
     #[cfg(target_os = "macos")]
     updater::start(tx.clone());
     app.save();
     app.last_save = Instant::now();
 
-    let result = event_loop(&mut terminal, &mut app, &mut screen, rx, tx.clone());
+    let result = event_loop(&mut terminal, app, &mut screen, rx, tx.clone());
 
-    for pid in app.children.clone() {
-        let _ = agent::signal(pid, libc::SIGTERM);
+    if app.pending_switch.is_none() {
+        for pid in app.children.clone() {
+            let _ = agent::signal(pid, libc::SIGTERM);
+        }
     }
     app.last_session_end = Some(Utc::now());
     let saved = app.save();
     screen.restore();
-    if result.is_ok() {
-        print_summary(&app, saved);
-    }
-    result
+    result.map(|()| saved)
 }
 
 fn event_loop(
@@ -220,6 +304,9 @@ fn event_loop(
         if let Some(id) = app.pending_tui_exec.take() {
             run_extension_exec(terminal, screen, app, &id);
         }
+        if let Ok(size) = terminal.size() {
+            ensure_pane(app, &tx, size.height.saturating_sub(7), size.width);
+        }
         terminal.draw(|frame| ui::draw(frame, app))?;
         if event::poll(Duration::from_millis(200))? {
             match event::read()? {
@@ -239,6 +326,190 @@ fn event_loop(
         }
     }
     Ok(())
+}
+
+fn is_pane(app: &App) -> bool {
+    app.selected_extension_tab()
+        .is_some_and(|tab| tab.spec.mode == TuiMode::Pane)
+}
+
+fn selected_pane_id(app: &App) -> Option<String> {
+    app.selected_extension_tab()
+        .filter(|tab| tab.spec.mode == TuiMode::Pane)
+        .map(|tab| tab.id.clone())
+}
+
+fn ensure_pane(app: &mut App, tx: &Sender<Msg>, rows: u16, cols: u16) {
+    let Some(id) = selected_pane_id(app) else {
+        return;
+    };
+    if let Some(pane) = app.panes.get_mut(&id) {
+        pane.poll();
+        return;
+    }
+    if app.pane_errors.contains_key(&id) {
+        return;
+    }
+    let Some(tab) = app.extension_tabs.iter().find(|tab| tab.id == id).cloned() else {
+        return;
+    };
+    let (command, args, cwd) = resolve_tui_command(app, &tab);
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("WM_EXTENSION_ID".into(), id.clone());
+    env.insert("WM_DATA_DIR".into(), app.root.display().to_string());
+    env.insert("WM_TUI".into(), "1".into());
+    env.insert("WM_TUI_PANE".into(), "1".into());
+    match crate::pane::Pane::start(
+        id.clone(),
+        &command,
+        &args,
+        cwd.as_deref(),
+        &env,
+        rows,
+        cols,
+        tx.clone(),
+    ) {
+        Ok(pane) => {
+            app.panes.insert(id.clone(), pane);
+            app.pane_errors.remove(&id);
+        }
+        Err(err) => {
+            app.pane_errors.insert(id, err);
+        }
+    }
+}
+
+fn resolve_tui_command(
+    app: &App,
+    tab: &crate::app::ExtensionTab,
+) -> (String, Vec<String>, Option<std::path::PathBuf>) {
+    let extension_dir = app
+        .local_catalog
+        .iter()
+        .find(|entry| entry.id == tab.id)
+        .map(|entry| entry.path.as_str())
+        .filter(|path| *path != "<embutida>")
+        .map(|path| app.root.join("extensions").join(path));
+    let expand = |value: &str| {
+        let mut value = value
+            .replace("{wm}", &app.exe.display().to_string())
+            .replace(
+                "{extension_dir}",
+                &extension_dir
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+            );
+        for (key, option) in &tab.spec.options {
+            value = value.replace(&format!("{{option:{key}}}"), option);
+        }
+        value
+    };
+    let command = expand(&tab.spec.command);
+    let args = tab.spec.args.iter().map(|arg| expand(arg)).collect();
+    let cwd = tab
+        .spec
+        .options
+        .get("cwd")
+        .map(|cwd| {
+            let path = std::path::PathBuf::from(expand(cwd));
+            if path.is_absolute() {
+                path
+            } else if let Some(dir) = &extension_dir {
+                dir.join(path)
+            } else {
+                app.root.join(path)
+            }
+        })
+        .or_else(|| extension_dir.clone());
+    (command, args, cwd)
+}
+
+fn handle_pane_key(app: &mut App, key: KeyEvent) -> bool {
+    if !is_pane(app) {
+        return false;
+    }
+    if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+        return false;
+    }
+    let Some(id) = selected_pane_id(app) else {
+        return false;
+    };
+    if app.panes.get(&id).is_none() {
+        if key.code == KeyCode::Enter {
+            app.pane_errors.remove(&id);
+        }
+        return true;
+    }
+    let exited = app.panes.get(&id).is_some_and(|pane| pane.exited);
+    if exited {
+        if key.code == KeyCode::Enter {
+            app.panes.remove(&id);
+            app.pane_errors.remove(&id);
+        }
+        return true;
+    }
+    if let Some(bytes) = key_bytes(key)
+        && let Some(pane) = app.panes.get_mut(&id)
+    {
+        pane.write(&bytes);
+    }
+    true
+}
+
+fn key_bytes(key: KeyEvent) -> Option<Vec<u8>> {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let mut bytes = Vec::new();
+    if alt {
+        bytes.push(0x1b);
+    }
+    match key.code {
+        KeyCode::Char(ch) if control => {
+            let ch = ch.to_ascii_lowercase();
+            if ch.is_ascii() {
+                bytes.push((ch as u8) & 0x1f);
+            }
+        }
+        KeyCode::Char(ch) => {
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+        KeyCode::Enter => bytes.push(b'\r'),
+        KeyCode::Backspace => bytes.push(0x7f),
+        KeyCode::Esc => bytes.push(0x1b),
+        KeyCode::Up => bytes.extend_from_slice(b"\x1b[A"),
+        KeyCode::Down => bytes.extend_from_slice(b"\x1b[B"),
+        KeyCode::Right => bytes.extend_from_slice(b"\x1b[C"),
+        KeyCode::Left => bytes.extend_from_slice(b"\x1b[D"),
+        KeyCode::Home => bytes.extend_from_slice(b"\x1b[H"),
+        KeyCode::End => bytes.extend_from_slice(b"\x1b[F"),
+        KeyCode::Delete => bytes.extend_from_slice(b"\x1b[3~"),
+        KeyCode::Insert => bytes.extend_from_slice(b"\x1b[2~"),
+        KeyCode::PageUp => bytes.extend_from_slice(b"\x1b[5~"),
+        KeyCode::PageDown => bytes.extend_from_slice(b"\x1b[6~"),
+        KeyCode::F(number) => {
+            let suffix = match number {
+                1 => "P",
+                2 => "Q",
+                3 => "R",
+                4 => "S",
+                5 => "15~",
+                6 => "17~",
+                7 => "18~",
+                8 => "19~",
+                9 => "20~",
+                10 => "21~",
+                11 => "23~",
+                12 => "24~",
+                _ => return None,
+            };
+            bytes.extend_from_slice(b"\x1b");
+            bytes.extend_from_slice(suffix.as_bytes());
+        }
+        _ => return None,
+    }
+    Some(bytes)
 }
 
 fn run_extension_exec(
@@ -321,6 +592,11 @@ fn run_extension_exec(
 }
 
 fn maybe_auto_start(app: &mut App, tx: &Sender<Msg>, no_auto_start: bool) {
+    if let Some(root) = app.desktop_root.clone() {
+        app.notify(Level::Info, "desktop: a autorização nativa instala uma cópia root-owned deste wm e autoriza seu UID a controlar este nó root; pode pedir senha (Touch ID não garantido). Apenas nó já inscrito; sem enrollment ou extensões elevadas.");
+        desktop::connect(root.clone(), app.exe.clone(), app.auto_start && !no_auto_start, false, tx.clone());
+        return;
+    }
     if !app.is_enrolled() {
         return;
     }
@@ -417,6 +693,9 @@ fn fetch<T: DeserializeOwned>(socket: &PathBuf, method: &str) -> Vec<T> {
 fn handle_msg(app: &mut App, msg: Msg, tx: &Sender<Msg>) {
     match msg {
         Msg::Update(snapshot) => {
+            if app.tab == TAB_NETWORKS {
+                app.refresh_profiles();
+            }
             let was_live = app.live;
             let had_snapshot = app.updated.is_some();
             let managed = app.agent.managed;
@@ -440,20 +719,37 @@ fn handle_msg(app: &mut App, msg: Msg, tx: &Sender<Msg>) {
         Msg::Console(level, text) => app.push_console(level, text),
         Msg::Agent(event) => handle_agent_event(app, event, tx),
         Msg::Job(event) => handle_job_event(app, event),
+        Msg::PaneData { id, bytes } => {
+            if let Some(pane) = app.panes.get_mut(&id) {
+                pane.feed(&bytes);
+            }
+        }
+        Msg::PaneClosed { id } => {
+            if let Some(pane) = app.panes.get_mut(&id) {
+                pane.exited = true;
+                if pane.exit.is_none() {
+                    pane.exit = Some("encerrado".into());
+                }
+            }
+        }
         Msg::Joined(node) => {
             let name = node
                 .as_ref()
                 .map(|node| format!("{} ({})", node.node_name, node.overlay_ip));
             app.node = node;
             app.node_error = None;
-            app.auto_start = true;
+            if app.desktop_root.is_none() { app.auto_start = true; }
             app.dirty = true;
             match name {
                 Some(name) => app.notify(Level::Good, format!("nó inscrito: {name}")),
-                None => app.notify(
-                    Level::Warn,
-                    "a inscrição terminou, mas agent-state.json não foi encontrado",
-                ),
+                None => {
+                    let message = if app.desktop_root.is_some() {
+                        "bridge conectado, mas não existe nó root inscrito; enrollment desktop ainda não implementado"
+                    } else {
+                        "a inscrição terminou, mas agent-state.json não foi encontrado"
+                    };
+                    app.notify(Level::Warn, message);
+                }
             }
         }
         Msg::CommandFinished {
@@ -651,6 +947,9 @@ fn menu_items(app: &App) -> Vec<MenuItem> {
     use MouseAction as A;
     let mut items = vec![
         menu_item("Executar comando no console…", A::OpenConsole),
+        menu_item("Meu perfil (como apareço)…", A::Profile),
+        menu_item("Nova rede local…", A::NewProfile),
+        menu_item("Redes e perfis", A::Tab(TAB_NETWORKS)),
         menu_item("Entrar na malha…", A::Join),
         menu_item("Iniciar agente", A::StartAgent),
         menu_item("Parar agente", A::StopAgent),
@@ -741,7 +1040,8 @@ fn handle_mouse(app: &mut App, event: MouseEvent, tx: &Sender<Msg>) {
                 if let Some(action) = app.hit_test(event.column, event.row, false) {
                     if matches!(
                         action,
-                        MouseAction::SelectPeer(_)
+                        MouseAction::SelectProfile(_)
+                            | MouseAction::SelectPeer(_)
                             | MouseAction::SelectShare(_)
                             | MouseAction::SelectJob(_)
                             | MouseAction::SelectExtension(_)
@@ -806,7 +1106,8 @@ fn mouse_click(app: &mut App, column: u16, row: u16, tx: &Sender<Msg>) {
     };
     let row_action = matches!(
         action,
-        MouseAction::SelectPeer(_)
+        MouseAction::SelectProfile(_)
+            | MouseAction::SelectPeer(_)
             | MouseAction::SelectShare(_)
             | MouseAction::SelectJob(_)
             | MouseAction::SelectExtension(_)
@@ -826,6 +1127,9 @@ fn mouse_scroll(app: &mut App, up: bool, column: u16, row: u16) {
         menu_move(app, if up { -1 } else { 1 });
         return;
     }
+    if is_pane(app) {
+        return;
+    }
     if crate::app::rect_contains(app.tabs_rect, column, row) {
         app.tab = if up {
             (app.tab + app.tab_count() - 1) % app.tab_count()
@@ -833,6 +1137,9 @@ fn mouse_scroll(app: &mut App, up: bool, column: u16, row: u16) {
             (app.tab + 1) % app.tab_count()
         };
         app.delete_armed = None;
+        if app.tab == TAB_NETWORKS {
+            app.refresh_profiles();
+        }
         return;
     }
     match app.tab {
@@ -884,6 +1191,11 @@ fn toggle_selected_extension(app: &mut App, tx: &Sender<Msg>) {
 
 fn activate_selection(app: &mut App, tx: &Sender<Msg>) {
     match app.tab {
+        TAB_NETWORKS => {
+            if let Some(status) = app.selected_profile().cloned() {
+                actions::switch_profile(app, &status.slug);
+            }
+        }
         TAB_PEERS => actions::open_probe_form(app),
         TAB_SHARES => actions::open_share(app),
         TAB_SERVICES => actions::view_job_log(app),
@@ -922,7 +1234,24 @@ fn execute_mouse(app: &mut App, action: MouseAction, tx: &Sender<Msg>) {
         A::Tab(index) => {
             app.tab = index.min(app.tab_count().saturating_sub(1));
             app.delete_armed = None;
+            if app.tab == TAB_NETWORKS {
+                app.refresh_profiles();
+            }
         }
+        A::SelectProfile(index) if index < app.profile_status.len() => {
+            app.profiles_table.select(Some(index));
+        }
+        A::Profile => actions::open_profile(app),
+        A::NewProfile => actions::open_new_profile(app),
+        A::RenameProfile => actions::open_rename_profile(app),
+        A::SwitchProfile => {
+            if let Some(status) = app.selected_profile().cloned() {
+                actions::switch_profile(app, &status.slug);
+            }
+        }
+        A::StartProfile => actions::start_profile(app),
+        A::StopProfile => actions::stop_profile(app),
+        A::RemoveProfile => actions::confirm_remove_profile(app),
         A::SelectPeer(index) if index < app.peers.len() => {
             app.table.select(Some(index));
             app.delete_armed = None;
@@ -944,7 +1273,8 @@ fn execute_mouse(app: &mut App, action: MouseAction, tx: &Sender<Msg>) {
         }
         A::ToggleExtension => toggle_selected_extension(app, tx),
         A::OpenExtensionsPanel => actions::open_extensions_panel(app),
-        A::SelectPeer(_)
+        A::SelectProfile(_)
+        | A::SelectPeer(_)
         | A::SelectShare(_)
         | A::SelectJob(_)
         | A::SelectExtension(_)
@@ -1051,6 +1381,9 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
         handle_input_key(app, key, tx);
         return;
     }
+    if handle_pane_key(app, key) {
+        return;
+    }
     match key.code {
         KeyCode::Char('q') => {
             app.quit = true;
@@ -1070,16 +1403,26 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
         }
         KeyCode::Char(digit @ '1'..='9') => {
             app.tab = (digit as usize - '1' as usize).min(app.tab_count().saturating_sub(1));
+            app.delete_armed = None;
+            if app.tab == TAB_NETWORKS {
+                app.refresh_profiles();
+            }
             return;
         }
         KeyCode::Tab | KeyCode::Right => {
             app.tab = (app.tab + 1) % app.tab_count();
             app.delete_armed = None;
+            if app.tab == TAB_NETWORKS {
+                app.refresh_profiles();
+            }
             return;
         }
         KeyCode::BackTab | KeyCode::Left => {
             app.tab = (app.tab + app.tab_count() - 1) % app.tab_count();
             app.delete_armed = None;
+            if app.tab == TAB_NETWORKS {
+                app.refresh_profiles();
+            }
             return;
         }
         _ => {}
@@ -1121,6 +1464,11 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             _ => {}
         },
         KeyCode::Enter => match app.tab {
+            TAB_NETWORKS => {
+                if let Some(status) = app.selected_profile().cloned() {
+                    actions::switch_profile(app, &status.slug);
+                }
+            }
             TAB_SHARES => actions::open_share(app),
             TAB_PEERS => actions::open_probe_form(app),
             TAB_SERVICES => actions::view_job_log(app),
@@ -1143,6 +1491,27 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
 
 fn handle_tab_action(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
     match app.tab {
+        TAB_NETWORKS => match key.code {
+            KeyCode::Char('n') => actions::open_new_profile(app),
+            KeyCode::Char('r') => actions::open_rename_profile(app),
+            KeyCode::Char('s') => actions::start_profile(app),
+            KeyCode::Char('x') => actions::stop_profile(app),
+            KeyCode::Char('d') => actions::confirm_remove_profile(app),
+            KeyCode::Char('p') => actions::open_profile(app),
+            KeyCode::Char('j') => {
+                if let Some(status) = app.selected_profile().cloned() {
+                    if status.slug == app.active_profile {
+                        app.form = Some(app::join_form());
+                    } else {
+                        app.notify(
+                            Level::Info,
+                            "entre na aba Redes com Enter e use j nesta rede para inscrevê-la",
+                        );
+                    }
+                }
+            }
+            _ => {}
+        },
         TAB_STATUS | TAB_AGENT => match key.code {
             KeyCode::Char('s') => actions::start_agent(app, tx),
             KeyCode::Char('X') => actions::confirm_stop_agent(app),
@@ -1158,6 +1527,7 @@ fn handle_tab_action(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
                 actions::confirm_install_service(app)
             }
             KeyCode::Char('n') if app.tab == TAB_STATUS => open_rename_node(app),
+            KeyCode::Char('p') if app.tab == TAB_STATUS => actions::open_profile(app),
             _ => {}
         },
         TAB_PEERS => match key.code {
@@ -1265,6 +1635,7 @@ fn open_new_share(app: &mut App) {
 
 fn navigate(app: &mut App, down: bool) {
     match app.tab {
+        TAB_NETWORKS => select(&mut app.profiles_table, app.profile_status.len(), down, 1),
         TAB_PEERS => select(&mut app.table, app.peers.len(), down, 1),
         TAB_SHARES => {
             select(&mut app.shares_table, app.shares.len(), down, 1);
@@ -1292,6 +1663,7 @@ fn navigate(app: &mut App, down: bool) {
 
 fn navigate_by(app: &mut App, delta: isize) {
     match app.tab {
+        TAB_NETWORKS => select_step(&mut app.profiles_table, app.profile_status.len(), delta),
         TAB_PEERS => select_step(&mut app.table, app.peers.len(), delta),
         TAB_SHARES => {
             select_step(&mut app.shares_table, app.shares.len(), delta);
@@ -1520,14 +1892,23 @@ fn print_summary(app: &App, saved: bool) {
     let _ = writeln!(out);
     let root = format!("'{}'", app.root.display().to_string().replace('\'', "'\"'\"'"));
     let live = agent::socket_ready(&app.socket);
+    let profile_hint = if app.active_profile == profiles::LEGACY_SLUG {
+        String::new()
+    } else {
+        format!(" --profile {}", app.active_profile)
+    };
     if live {
         let pid = agent::read_pid(&app.root)
             .or(app.agent.pid)
             .map(|pid| format!(" (pid {pid})"))
             .unwrap_or_default();
         let _ = writeln!(out, "O agente continua ativo{pid} em segundo plano.");
-        let _ = writeln!(out, "  reabrir:  wm --data-dir {root} tui");
-        let _ = writeln!(out, "  parar:    wm --data-dir {root} down");
+        let _ = writeln!(out, "  reabrir:  wm --data-dir {root} tui{profile_hint}");
+        let profile_root = format!(
+            "'{}'",
+            app.root.display().to_string().replace('\'', "'\"'\"'")
+        );
+        let _ = writeln!(out, "  parar:    wm --data-dir {profile_root} down");
         let _ = writeln!(out, "  log:      {}", app.log_path.display());
     } else if app.agent.starting.is_some() {
         let _ = writeln!(
@@ -1637,11 +2018,11 @@ mod tests {
         let root = temp_root("keys");
         let mut app = App::load(root.clone());
         let (tx, _rx) = sender();
-        press(&mut app, KeyCode::Char('5'), &tx);
-        assert_eq!(app.tab, TAB_AGENT);
         press(&mut app, KeyCode::Char('6'), &tx);
+        assert_eq!(app.tab, TAB_AGENT);
+        press(&mut app, KeyCode::Char('7'), &tx);
         assert_eq!(app.tab, TAB_EXTENSIONS);
-        press(&mut app, KeyCode::Char('8'), &tx);
+        press(&mut app, KeyCode::Char('9'), &tx);
         assert_eq!(app.tab, TAB_CONSOLE);
         press(&mut app, KeyCode::Char('?'), &tx);
         assert_eq!(app.tab, TAB_HELP);
@@ -1797,6 +2178,10 @@ mod tests {
         ));
         let node_id = Uuid::new_v4();
         let status = AgentStatus {
+            display_name: String::new(),
+            about: String::new(),
+            requirements: Default::default(),
+            compliance: Default::default(),
             version: "0.1.0".into(),
             node_id: Some(node_id),
             node_name: Some("site".into()),
@@ -1814,6 +2199,8 @@ mod tests {
             last_error: None,
         };
         let peer = PeerStatus {
+            display_name: String::new(),
+            about: String::new(),
             id: Uuid::new_v4(),
             name: "mac-01".into(),
             overlay_ip: "10.66.0.12".parse().unwrap(),
@@ -1999,6 +2386,9 @@ mod tests {
         let mut app = App::load(root.clone());
         let (tx, _rx) = sender();
         app.node = Some(crate::persist::EnrolledNode {
+            overlay_cidr: String::new(),
+            display_name: String::new(),
+            about: String::new(),
             node_name: "site".into(),
             overlay_ip: "10.66.0.1".into(),
             control_url: "https://mesh.test".into(),
@@ -2007,6 +2397,8 @@ mod tests {
         });
         app.peers = vec![
             PeerStatus {
+                display_name: String::new(),
+                about: String::new(),
                 id: Uuid::new_v4(),
                 name: "mac-01".into(),
                 overlay_ip: "10.66.0.12".parse().unwrap(),
@@ -2020,6 +2412,8 @@ mod tests {
                 last_error: None,
             },
             PeerStatus {
+                display_name: String::new(),
+                about: String::new(),
                 id: Uuid::new_v4(),
                 name: "mac-02".into(),
                 overlay_ip: "10.66.0.13".parse().unwrap(),
@@ -2098,6 +2492,9 @@ mod tests {
         let mut app = App::load(root.clone());
         let (tx, _rx) = sender();
         app.node = Some(crate::persist::EnrolledNode {
+            overlay_cidr: String::new(),
+            display_name: String::new(),
+            about: String::new(),
             node_name: "site".into(),
             overlay_ip: "10.66.0.1".into(),
             control_url: "https://mesh.test".into(),
@@ -2178,7 +2575,7 @@ mod tests {
             },
             &tx,
         );
-        assert_eq!(app.tab, TAB_PEERS);
+        assert_eq!(app.tab, crate::app::TAB_NETWORKS);
         handle_mouse(
             &mut app,
             MouseEvent {
@@ -2216,6 +2613,8 @@ mod tests {
         let mut app = App::load(root.clone());
         let (tx, _rx) = sender();
         let base = PeerStatus {
+            display_name: String::new(),
+            about: String::new(),
             id: Uuid::new_v4(),
             name: "peer".into(),
             overlay_ip: "10.66.0.12".parse().unwrap(),
@@ -2322,6 +2721,9 @@ mod tests {
         let (tx, _rx) = sender();
         let node_id = Uuid::new_v4();
         app.node = Some(crate::persist::EnrolledNode {
+            overlay_cidr: String::new(),
+            display_name: String::new(),
+            about: String::new(),
             node_name: "site".into(),
             overlay_ip: "10.66.0.1".into(),
             control_url: "https://mesh.test".into(),
@@ -2329,6 +2731,10 @@ mod tests {
             created_at: None,
         });
         app.status = Some(AgentStatus {
+            display_name: String::new(),
+            about: String::new(),
+            requirements: Default::default(),
+            compliance: Default::default(),
             version: "0.1.0".into(),
             node_id: Some(node_id),
             node_name: Some("site".into()),
@@ -2413,5 +2819,26 @@ mod tests {
         assert!(app.tab >= crate::app::TABS.len());
         assert_eq!(app.selected_extension_tab().unwrap().id, "chat");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pane_key_encoding_covers_common_keys() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        assert_eq!(
+            key_bytes(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(b"\r".to_vec())
+        );
+        assert_eq!(
+            key_bytes(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            key_bytes(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(vec![0x03])
+        );
+        assert_eq!(
+            key_bytes(KeyEvent::new(KeyCode::Char('ç'), KeyModifiers::NONE)),
+            Some("ç".as_bytes().to_vec())
+        );
     }
 }
