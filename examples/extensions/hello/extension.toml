@@ -8,6 +8,7 @@ name = "Hello Sidecar"
 version = "0.1.0"
 description = "Exemplo de extensão declarativa que roda um processo supervisionado no nó."
 author = "operação"
+visibility = "public"
 node_driver = "exec"
 ui = "generic"
 

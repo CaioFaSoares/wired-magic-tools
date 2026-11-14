@@ -204,7 +204,8 @@ O estado desejado viaja em `NetworkMap.extensions`; o observado volta em
 hooks e adapters estão em [`extensions.md`](extensions.md) e
 [`hooks-adapters.md`](hooks-adapters.md).
 
-- `GET /api/v1/admin/extensions` — manifestos carregados + contagens.
+- `GET /api/v1/admin/extensions` — manifestos carregados + contagens; cada
+  item inclui `visibility` (`public`/`private`) e `builtin`.
 - `GET /api/v1/admin/extensions/{id}` — manifesto + config/status por nó.
 - `POST /api/v1/admin/extensions/reload` (CSRF) — relê manifestos; incrementa a
   versão do mapa.

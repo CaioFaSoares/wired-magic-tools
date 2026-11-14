@@ -4,6 +4,8 @@ import {
   ArrowRight,
   Box,
   Cloud,
+  Globe2,
+  Lock,
   Puzzle,
   RefreshCw,
   Terminal,
@@ -49,9 +51,19 @@ function ExtensionCard({ extension }: { extension: ExtensionView }) {
             </p>
           </div>
         </div>
-        <Badge tone={extension.builtin ? "accent" : "neutral"}>
-          {extension.builtin ? "embutida" : "declarativa"}
-        </Badge>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge tone={extension.visibility === "private" ? "warn" : "accent"}>
+            {extension.visibility === "private" ? (
+              <Lock aria-hidden="true" className="size-3" />
+            ) : (
+              <Globe2 aria-hidden="true" className="size-3" />
+            )}
+            {extension.visibility === "private" ? "privada" : "pública"}
+          </Badge>
+          <Badge tone={extension.builtin ? "accent" : "neutral"}>
+            {extension.builtin ? "embutida" : "declarativa"}
+          </Badge>
+        </div>
       </div>
 
       <p className="min-h-10 px-4 text-xs leading-5 text-muted">
@@ -188,7 +200,7 @@ export function ExtensionsPage() {
             <Puzzle aria-hidden="true" className="size-6 text-faint" />
             <p className="text-sm font-medium text-ink">Nenhuma extensão carregada</p>
             <p className="max-w-md text-xs leading-5 text-muted">
-              O control plane semeia o manifesto do cloudflared no primeiro boot. Verifique a pasta de
+              O control plane semeia as extensões embutidas no primeiro boot. Verifique a pasta de
               extensões e recarregue os manifestos.
             </p>
           </div>

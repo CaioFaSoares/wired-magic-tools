@@ -81,7 +81,7 @@ overlay. A extensão **Seance** automatiza montagem, share, labels e expose:
 sudo wm extensions enable seance
 ```
 
-O manifesto (`extensions/seance/extension.toml`) roda o hook de instalação, inicia
+O manifesto (`extensions/private/seance/extension.toml`) roda o hook de instalação, inicia
 `seance-agent`, publica `baguette-<nó>` e cria um listener `10.66.0.12:8421` →
 `127.0.0.1:8421`, sujeito à ACL. A ativação também pode ser feita na TUI (`aba Extensões`,
 `Enter`) ou no painel.

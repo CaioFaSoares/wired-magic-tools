@@ -1,0 +1,51 @@
+# Extensão pública: debug.
+#
+# Sobe um painel de performance do host e do processo `wm` em loopback
+# (127.0.0.1:8791). O adapter publica o share `debug-<nó>` e expõe a porta no
+# overlay; não há exposição pública nem autenticação. Mantenha na malha.
+#
+# O sidecar é o próprio binário `wm`: o hook de ativação grava um wrapper em
+# /usr/local/bin/wm-debug que executa `wm debug`.
+id = "debug"
+name = "Debug público"
+version = "0.1.0"
+description = "Painel de performance do host e do processo wm: CPU, memória, discos, rede e top processos."
+author = "wired-magic"
+homepage = "https://github.com/CaioFaSoares/wired-magic-tools/tree/main/extensions/public/debug"
+visibility = "public"
+node_driver = "exec"
+ui = "generic"
+default_active = false
+
+[default_config]
+command = "/usr/local/bin/wm-debug"
+args = ["--listen", "127.0.0.1:8791"]
+restart = "always"
+
+[config_example]
+command = "/usr/local/bin/wm-debug"
+args = ["--listen", "127.0.0.1:8791", "--title", "Debug público"]
+restart = "always"
+
+[hooks.install]
+command = "{extension_dir}/install.sh"
+timeout_secs = 60
+
+[hooks.activate]
+command = "{extension_dir}/activate.sh"
+timeout_secs = 30
+
+[hooks.deactivate]
+command = "{extension_dir}/deactivate.sh"
+timeout_secs = 10
+
+[adapter]
+labels = { debug = "true", debug_port = "8791" }
+exposes = [{ overlay_port = 8791, local_port = 8791 }]
+
+[[adapter.shares]]
+name = "debug-{node}"
+port = 8791
+kind = "web"
+protocol = "tcp"
+description = "Painel de performance do nó"

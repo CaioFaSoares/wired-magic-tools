@@ -912,12 +912,19 @@ versionado; o agente reconcilia sidecars e devolve o estado no report — sem po
 conexão nova. Extensões node-side são **ativáveis por nó** na TUI (aba **Extensões**,
 `Enter/t`), no painel ou por `wm extensions enable <id>`; começam desativadas.
 
-A pasta [`extensions/`](extensions/) é a fonte de verdade dos bundlados:
+A pasta [`extensions/`](extensions/) é a fonte de verdade dos bundlados, dividida em
+**públicas** (`extensions/public/`) e **privadas** (`extensions/private/`):
 
-- **Cloudflare Tunnel** (`quick` com URL efêmera ou `named` com hostname próprio);
-- **Seance**, a receita de referência: `install.sh` instala o `seance-agent`, `activate.sh`
-  prepara, o adapter publica o share `baguette-<nó>`, expõe `8421` no overlay e aplica as
-  labels `seance`/`baguette_port`.
+- **Cloudflare Tunnel** (pública; `quick` com URL efêmera ou `named` com hostname próprio);
+- **Chat público** (pública): o sidecar `wm chat` serve uma sala web em `127.0.0.1:8790`, o
+  adapter publica o share `chat-<nó>` e expõe a porta só no overlay. O acesso é sempre pelo
+  túnel da malha — um nó com portas públicas fechadas continua alcançando o chat do nó
+  servidor. Sem autenticação por padrão; mantenha fora da internet;
+- **Debug público** (pública): o sidecar `wm debug` serve um painel de performance do host e
+  do processo `wm` em `127.0.0.1:8791`, com share `debug-<nó>` e porta exposta só no overlay;
+- **Seance** (privada), a receita de integração interna: `install.sh` instala o
+  `seance-agent`, `activate.sh` prepara, o adapter publica o share `baguette-<nó>`, expõe
+  `8421` no overlay e aplica as labels `seance`/`baguette_port`.
 
 Manifestos ficam em `<data-dir>/extensions/<id>/extension.toml`; extensões declarativas usam
 `node_driver = "exec"` e um JSON validado por nó. Hooks de ciclo de vida e adapters estão em
@@ -953,6 +960,8 @@ No Linux, logs do serviço: `journalctl -u wired-magic-agent -n 200 --no-pager`.
 | `wm shares [--json]` | lista os shares da malha |
 | `wm extensions [--json]` | catálogo de extensões deste nó (TUI/GUI local) |
 | `wm extensions enable <id>` / `disable <id>` | ativa/desativa no nó atual |
+| `wm chat [--listen]` | serve a sala pública da extensão `chat` (loopback) |
+| `wm debug [--listen]` | serve o painel de performance da extensão `debug` (loopback) |
 | `wm open <nome> [--print]` | abre um share web ou imprime o endereço |
 | `wm share-rename <nome> <novo>` | renomeia um share seu |
 | `wm share-enable <nome> [--off]` | liga/desliga um share seu |

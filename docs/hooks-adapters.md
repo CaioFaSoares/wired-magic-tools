@@ -69,6 +69,7 @@ que o limite configurado.
 
 | variável | valor |
 | --- | --- |
+| `WM_AGENT_BIN` | caminho absoluto do binário `wm` que roda o agente (útil para wrappers de extensões) |
 | `WM_NODE_ID`, `WM_NODE_NAME` | identidade do nó |
 | `WM_OVERLAY_IP` | IP do nó na malha |
 | `WM_CONTROL_URL` | URL pública do control |
@@ -145,7 +146,7 @@ limpa os exposes de extensão.
 
 ## 4. Seance como referência
 
-`extensions/seance/` demonstra o fluxo completo:
+`extensions/private/seance/` demonstra o fluxo completo:
 
 1. `default_config` aponta para `/usr/local/bin/seance-agent`; o `install.sh` copia para lá se o binário estiver em outro ponto do PATH.
 2. `hooks.install` roda `install.sh` uma vez; o script baixa

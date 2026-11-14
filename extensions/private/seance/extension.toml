@@ -1,4 +1,4 @@
-# Adaptador de referência do Seance.
+# Adaptador privado do Seance (não faz parte do catálogo público).
 #
 # O que ele faz quando ativado em um nó:
 #   - roda install.sh uma vez (instala o seance-agent);
@@ -14,6 +14,7 @@ name = "Seance"
 version = "0.1.0"
 description = "Monta o agente do Seance no nó, expõe o Baguette e publica o share na malha."
 author = "wired-magic"
+visibility = "private"
 node_driver = "exec"
 ui = "generic"
 default_active = false

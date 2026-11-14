@@ -196,7 +196,7 @@ export function ExtensionDetailPage() {
         }
       />
 
-      <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
         <div className="panel p-3">
           <p className="text-[10px] uppercase tracking-[0.14em] text-faint">Driver</p>
           <p className="mt-1 font-mono text-sm text-ink">{extension.node_driver}</p>
@@ -212,6 +212,12 @@ export function ExtensionDetailPage() {
         <div className="panel p-3">
           <p className="text-[10px] uppercase tracking-[0.14em] text-faint">Ativos</p>
           <p className="mt-1 text-sm text-ink">{running} nó(s)</p>
+        </div>
+        <div className="panel p-3">
+          <p className="text-[10px] uppercase tracking-[0.14em] text-faint">Catálogo</p>
+          <p className="mt-1 text-sm text-ink">
+            {extension.visibility === "private" ? "Privada" : "Pública"}
+          </p>
         </div>
       </div>
 

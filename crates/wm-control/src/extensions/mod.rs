@@ -408,6 +408,7 @@ impl ExtensionRegistry {
             author: manifest.author.clone(),
             homepage: manifest.homepage.clone(),
             builtin: self.is_builtin(&manifest.id),
+            visibility: manifest.visibility.as_str().to_string(),
             node_driver: manifest.node_driver.as_str().to_string(),
             ui: manifest.ui_kind().to_string(),
             config_example: manifest.config_example.clone(),
@@ -551,6 +552,8 @@ pub struct ExtensionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     pub builtin: bool,
+    /// `public` (catálogo aberto) ou `private` (interno/operador).
+    pub visibility: String,
     pub node_driver: String,
     pub ui: String,
     pub config_example: serde_json::Value,

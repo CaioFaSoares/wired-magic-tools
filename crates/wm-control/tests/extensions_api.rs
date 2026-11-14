@@ -539,3 +539,35 @@ async fn admin_can_activate_an_extension_for_a_node() {
         .unwrap();
     assert_eq!(node_view["active"], true);
 }
+
+#[tokio::test]
+async fn seeded_catalog_exposes_public_and_private_visibility() {
+    let (_dir, state) = boot().await;
+    let app = wm_control::api::router(state.clone());
+    let admin = login(&app).await;
+
+    let (status, catalog) = request(
+        &app,
+        "GET",
+        "/api/v1/admin/extensions",
+        Some(&admin),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    let entries = catalog.as_array().expect("catalog array");
+
+    for (id, visibility) in [
+        ("cloudflared", "public"),
+        ("chat", "public"),
+        ("debug", "public"),
+        ("seance", "private"),
+    ] {
+        let entry = entries
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .unwrap_or_else(|| panic!("extensão {id} ausente do catálogo"));
+        assert_eq!(entry["visibility"], visibility, "{id}: {entry}");
+    }
+}

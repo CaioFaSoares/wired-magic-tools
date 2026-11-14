@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Sala de chat público servida por uma extensão do wired-magic." />
+    <title>Chat público · wired-magic</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><i></i></span>
+          <div class="brand-copy">
+            <p class="eyebrow">wired-magic</p>
+            <h1 id="room-title">Chat público</h1>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <span id="node-chip" class="chip" hidden></span>
+          <span class="chip chip-live"><i aria-hidden="true"></i> público</span>
+        </div>
+      </header>
+
+      <main class="stage">
+        <section class="board" aria-label="Mensagens da sala">
+          <div class="board-head">
+            <p id="room-subtitle">Sala aberta: qualquer pessoa com acesso a esta porta pode conversar.</p>
+            <span id="count" class="count">0 mensagens</span>
+          </div>
+
+          <ol id="messages" class="messages" aria-live="polite" aria-relevant="additions"></ol>
+
+          <div id="empty" class="empty">
+            <span class="empty-mark" aria-hidden="true"></span>
+            <p class="empty-title">A sala está quieta.</p>
+            <p class="empty-copy">Envie a primeira mensagem. O histórico fica em memória e reinicia junto com o sidecar.</p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="composer">
+        <form id="composer-form" class="composer-form" autocomplete="off">
+          <label class="field field-name">
+            <span>Seu nome</span>
+            <input id="author" name="author" maxlength="32" autocomplete="nickname" placeholder="anônimo" />
+          </label>
+          <label class="field field-text">
+            <span class="sr-only">Mensagem</span>
+            <textarea
+              id="text"
+              name="text"
+              maxlength="2000"
+              rows="1"
+              placeholder="Escreva algo para a sala…"
+              aria-label="Mensagem"
+            ></textarea>
+          </label>
+          <button id="send" class="send" type="submit">
+            <span class="send-label">Enviar</span>
+            <span class="send-icon" aria-hidden="true"></span>
+          </button>
+        </form>
+        <p id="hint" class="hint" role="status">Carregando a sala…</p>
+      </footer>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

@@ -17,6 +17,8 @@ use wm_proto::{
     ShareKind, ShareProtocol, decode_connect_code, decode_join_target, encode_connect_code,
 };
 
+mod chat;
+mod debug;
 mod gui;
 mod service;
 
@@ -98,6 +100,10 @@ enum Command {
         #[command(subcommand)]
         action: Option<ExtensionsAction>,
     },
+    /// Serve a sala de chat público da extensão `chat`.
+    Chat(ChatArgs),
+    /// Serve o painel de performance da extensão `debug`.
+    Debug(DebugArgs),
     /// Abre a TUI (o agente iniciado por ela continua rodando ao sair).
     Tui(TuiArgs),
     /// Diagnóstico da máquina e do nó.
@@ -241,6 +247,32 @@ enum ExtensionsAction {
 }
 
 #[derive(clap::Args)]
+struct ChatArgs {
+    /// Endereço de escuta (loopback por padrão).
+    #[arg(long, default_value = "127.0.0.1:8790", env = "WM_CHAT_LISTEN")]
+    listen: SocketAddr,
+    /// Título exibido na sala.
+    #[arg(long, default_value = "Chat público", env = "WM_CHAT_TITLE")]
+    title: String,
+    /// Nome do nó exibido no cabeçalho (o hook de ativação preenche).
+    #[arg(long, env = "WM_CHAT_NODE")]
+    node: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct DebugArgs {
+    /// Endereço de escuta (loopback por padrão).
+    #[arg(long, default_value = "127.0.0.1:8791", env = "WM_DEBUG_LISTEN")]
+    listen: SocketAddr,
+    /// Título exibido no painel.
+    #[arg(long, default_value = "Debug público", env = "WM_DEBUG_TITLE")]
+    title: String,
+    /// Nome do nó exibido no cabeçalho (o hook de ativação preenche).
+    #[arg(long, env = "WM_DEBUG_NODE")]
+    node: Option<String>,
+}
+
+#[derive(clap::Args)]
 struct GuiArgs {
     #[arg(long, default_value = "127.0.0.1:8787")]
     listen: SocketAddr,
@@ -334,6 +366,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Open { target, print } => run_open(&root, &target, print).await,
         Command::Gui(args) => gui::run(root, args.listen, !args.no_open).await,
         Command::Extensions { json, action } => run_extensions(&root, json, action).await,
+        Command::Chat(args) => chat::run(args.listen, args.title, args.node).await,
+        Command::Debug(args) => debug::run(args.listen, args.title, args.node).await,
         Command::Tui(args) => run_tui(&root, args).await,
         Command::Doctor => run_doctor(&root).await,
         Command::Service(args) => run_service(args, &root).await,

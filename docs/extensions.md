@@ -44,8 +44,9 @@ versão do mapa muda por causa de peers ou ACL.
 **Ativação é por nó.** Extensões node-side começam inativas em nós novos; a TUI
 (`aba Extensões`, `Enter/t`), o painel web e a API alternam. Manifestos podem
 declarar `default_config` para que ativar já materialize a config. Hooks e
-adapters são detalhados em [hooks-adapters.md](hooks-adapters.md); a extensão
-`seance` é a receita de referência para montar um produto no nó.
+adapters são detalhados em [hooks-adapters.md](hooks-adapters.md). A extensão
+`chat` é a receita pública de referência (sidecar + adapter + UI); `seance` é a
+integração privada que monta um produto no nó.
 
 O `ReportRequest` devolve o estado observado. O control guarda a última foto em
 `extension_status`, o painel faz merge e o SSE invalida as consultas. O
@@ -88,6 +89,7 @@ version = "0.1.0"
 description = "Um sidecar declarativo de exemplo."
 author = "operação"
 homepage = "https://example.com/hello" # opcional
+visibility = "public"        # public (default) | private
 node_driver = "exec"         # none | exec | cloudflared
 ui = "generic"               # cloudflared | generic (default)
 
@@ -106,6 +108,9 @@ Regras:
 - Campos desconhecidos no TOML são rejeitados para evitar knob silencioso.
 - `ui = "cloudflared"` faz o painel React renderizar o gerenciador de rotas; os
   demais usam o editor genérico de JSON.
+- `visibility = "public" | "private"` classifica a extensão no catálogo (padrão
+  `public`). É metadado: o loader e o supervisor tratam as duas igualmente. A
+  separação de pastas está em [`extensions/README.md`](../extensions/README.md).
 - `default_active = false` mantém a extensão no catálogo, mas sem rodar até ser
   ativada no nó (cloudflared e seance usam o fallback de compatibilidade).
 - `default_config`, `hooks` e `[adapter]` são opcionais; veja
@@ -139,6 +144,30 @@ Regras:
 O driver `exec` roda o comando **diretamente, sem shell**, como o usuário do
 agente (root, na prática). `args` é uma lista; `env` aceita nomes
 `[A-Za-z_][A-Za-z0-9_]*`; `public_urls` é apenas informativo para o painel.
+
+### 2.2 Extensões públicas e privadas
+
+A pasta [`extensions/`](../extensions/) do repositório separa o catálogo aberto
+do material interno:
+
+```text
+extensions/public/     # cloudflared, chat, debug — distribuição aberta
+extensions/private/    # seance — interno/operador
+```
+
+O control continua semeando tudo em `<data_dir>/extensions/<id>/` (layout
+plano). A classificação aparece no painel e vem do campo `visibility` do
+manifesto. Extensões públicas devem trazer um `README.md` com contrato e modelo
+de segurança; privadas não são documentadas como exemplo.
+
+As extensões `chat` e `debug` mostram o ciclo completo de uma extensão pública
+declarativa: sidecar `exec`, hook de ativação que prepara o wrapper, adapter com
+label + share + expose e uma UI própria servida pelo sidecar. Ambas são
+mesh-only: escutam em loopback e só são expostas no overlay, então um nó com
+portas públicas fechadas continua acessando o serviço do nó servidor pelo
+túnel da malha. Guias em
+[`extensions/public/chat/README.md`](../extensions/public/chat/README.md) e
+[`extensions/public/debug/README.md`](../extensions/public/debug/README.md).
 
 > **Modelo de confiança:** só um admin do control pode gravar configuração, e a
 > extensão roda com o privilégio do agente. Trate o JSON de `exec` como uma unit
@@ -456,6 +485,7 @@ protocol = "tcp"
 O ciclo completo — quando cada hook roda, variáveis `WM_*`, placeholders,
 propriedade de shares, exposes dinâmicos e a receita do Seance — está em
 [hooks-adapters.md](hooks-adapters.md). A pasta [`extensions/`](../extensions/)
-no repositório é a fonte de verdade dos bundlados; o control semeia
-`<data_dir>/extensions/` no boot sem sobrescrever manifestos editados (scripts
-embutidos de hook são arquivos gerenciados e atualizados).
+no repositório é a fonte de verdade dos bundlados, dividida em `public/` e
+`private/`; o control semeia `<data_dir>/extensions/` no boot sem sobrescrever
+manifestos editados (scripts embutidos de hook são arquivos gerenciados e
+atualizados).

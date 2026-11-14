@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Painel de performance público do wired-magic." />
+    <title>Debug público · wired-magic</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="brand-copy">
+            <p class="eyebrow">wired-magic · telemetria</p>
+            <h1 id="panel-title">Debug público</h1>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <span id="host-chip" class="chip">host</span>
+          <span id="node-chip" class="chip" hidden></span>
+          <span class="chip chip-live"><i aria-hidden="true"></i> ao vivo</span>
+        </div>
+      </header>
+
+      <main class="page">
+        <section class="overview" aria-label="Resumo de performance">
+          <section class="stat" aria-labelledby="cpu-title">
+            <div class="stat-head">
+              <p class="stat-label" id="cpu-title">CPU</p>
+              <p id="cpu-usage" class="stat-value">—</p>
+            </div>
+            <div class="meter"><span id="cpu-bar" class="meter-fill"></span></div>
+            <p id="cpu-brand" class="stat-meta">—</p>
+          </section>
+
+          <section class="stat" aria-labelledby="mem-title">
+            <div class="stat-head">
+              <p class="stat-label" id="mem-title">Memória</p>
+              <p id="mem-usage" class="stat-value">—</p>
+            </div>
+            <div class="meter"><span id="mem-bar" class="meter-fill"></span></div>
+            <p id="mem-meta" class="stat-meta">—</p>
+          </section>
+
+          <section class="stat" aria-labelledby="load-title">
+            <div class="stat-head">
+              <p class="stat-label" id="load-title">Load average</p>
+              <p id="load-1" class="stat-value">—</p>
+            </div>
+            <p id="load-meta" class="stat-meta">—</p>
+            <p class="stat-meta stat-meta-soft">1 min · 5 min · 15 min</p>
+          </section>
+
+          <section class="stat" aria-labelledby="wm-title">
+            <div class="stat-head">
+              <p class="stat-label" id="wm-title">Processo wm</p>
+              <p id="wm-cpu" class="stat-value">—</p>
+            </div>
+            <p id="wm-meta" class="stat-meta">—</p>
+            <p id="wm-pid" class="stat-meta stat-meta-soft">—</p>
+          </section>
+        </section>
+
+        <section class="dashboard">
+          <section class="card card-hero" aria-labelledby="system-title">
+            <div class="card-head">
+              <div>
+                <p class="card-eyebrow">Sistema</p>
+                <h2 id="system-title">Host</h2>
+              </div>
+              <span id="uptime-chip" class="chip">—</span>
+            </div>
+            <dl class="facts">
+              <div><dt>Hostname</dt><dd id="host-name">—</dd></div>
+              <div><dt>Sistema</dt><dd id="os-name">—</dd></div>
+              <div><dt>Kernel</dt><dd id="kernel">—</dd></div>
+              <div><dt>Arquitetura</dt><dd id="arch">—</dd></div>
+            </dl>
+          </section>
+
+          <section class="card card-cpu" aria-labelledby="cores-title">
+            <div class="card-head">
+              <div>
+                <p class="card-eyebrow">Carga por núcleo</p>
+                <h2 id="cores-title">Núcleos</h2>
+              </div>
+              <span id="cores-chip" class="chip">—</span>
+            </div>
+            <div id="core-bars" class="core-bars" aria-live="polite"></div>
+          </section>
+
+          <section class="card card-wm" aria-labelledby="wm-detail-title">
+            <div class="card-head">
+              <div>
+                <p class="card-eyebrow">Agente da malha</p>
+                <h2 id="wm-detail-title">Processo do wm</h2>
+              </div>
+              <span id="wm-state" class="chip">—</span>
+            </div>
+            <dl class="facts facts-compact">
+              <div><dt>PID</dt><dd id="wm-pid-detail">—</dd></div>
+              <div><dt>PPID</dt><dd id="wm-ppid">—</dd></div>
+              <div><dt>CPU</dt><dd id="wm-cpu-detail">—</dd></div>
+              <div><dt>RSS</dt><dd id="wm-rss">—</dd></div>
+              <div><dt>Virtual</dt><dd id="wm-virt">—</dd></div>
+              <div><dt>Uptime</dt><dd id="wm-uptime">—</dd></div>
+            </dl>
+            <p class="cmd-label">Linha de comando</p>
+            <pre id="wm-cmd" class="cmd">—</pre>
+          </section>
+
+          <section class="card" aria-labelledby="disks-title">
+            <div class="card-head">
+              <div>
+                <p class="card-eyebrow">Armazenamento</p>
+                <h2 id="disks-title">Discos</h2>
+              </div>
+              <span id="disks-chip" class="chip">—</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data">
+                <thead>
+                  <tr><th scope="col">Mount</th><th scope="col">Uso</th><th scope="col" class="num">Livre</th></tr>
+                </thead>
+                <tbody id="disks-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="card" aria-labelledby="net-title">
+            <div class="card-head">
+              <div>
+                <p class="card-eyebrow">Rede</p>
+                <h2 id="net-title">Interfaces</h2>
+              </div>
+              <span id="net-chip" class="chip">—</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data">
+                <thead>
+                  <tr><th scope="col">Interface</th><th scope="col" class="num">RX/s</th><th scope="col" class="num">TX/s</th><th scope="col" class="num">Total</th></tr>
+                </thead>
+                <tbody id="net-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="card card-processes" aria-labelledby="proc-title">
+            <div class="card-head">
+              <div>
+                <p class="card-eyebrow">Top consumidores</p>
+                <h2 id="proc-title">Processos</h2>
+              </div>
+              <span id="proc-chip" class="chip">—</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data">
+                <thead>
+                  <tr><th scope="col">PID</th><th scope="col">Processo</th><th scope="col" class="num">CPU</th><th scope="col" class="num">RSS</th><th scope="col">Estado</th></tr>
+                </thead>
+                <tbody id="proc-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p id="hint" class="hint" role="status">Carregando a primeira amostra…</p>
+        <p class="footer-meta">
+          <span id="timestamp">—</span>
+          <span aria-hidden="true">·</span>
+          <span id="version">wm —</span>
+          <span aria-hidden="true">·</span>
+          <span>sem autenticação; mantenha na malha</span>
+        </p>
+      </footer>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

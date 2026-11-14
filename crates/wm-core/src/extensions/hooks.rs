@@ -142,6 +142,9 @@ async fn run_hook(
         .collect();
 
     let mut env: BTreeMap<String, String> = BTreeMap::new();
+    if let Ok(binary) = std::env::current_exe() {
+        env.insert("WM_AGENT_BIN".into(), binary.display().to_string());
+    }
     env.insert("WM_NODE_ID".into(), ctx.node_id.to_string());
     env.insert("WM_NODE_NAME".into(), ctx.node_name.clone());
     env.insert("WM_OVERLAY_IP".into(), ctx.overlay_ip.to_string());

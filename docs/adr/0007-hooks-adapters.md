@@ -50,7 +50,7 @@ no report, com cloudflared e `exec`. Faltavam três coisas para o uso real:
    embutida no binário e semeada em `<data_dir>/extensions` sem sobrescrever
    edições. Scripts de hook são semeados junto.
 7. **Seance como receita.**
-   `extensions/seance/` usa `default_config` + hooks de install/activate +
+   `extensions/private/seance/` usa `default_config` + hooks de install/activate +
    adapter (labels `seance`/`baguette_port`, share `baguette-<nó>`, expose 8421).
    O operador só precisa ativar; o instalador real é o script/hook do manifesto.
 

@@ -296,6 +296,7 @@ export interface ExtensionView {
   author: string;
   homepage?: string | null;
   builtin: boolean;
+  visibility: "public" | "private";
   node_driver: ExtensionDriver;
   ui: string;
   config_example?: unknown;

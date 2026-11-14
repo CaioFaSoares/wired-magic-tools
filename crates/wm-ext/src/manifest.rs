@@ -20,6 +20,31 @@ use wm_proto::{
 pub const CLOUDFLARED_ID: &str = "cloudflared";
 pub const CLOUDFLARED_DRIVER: &str = "cloudflared";
 pub const EXEC_DRIVER: &str = "exec";
+pub const CHAT_ID: &str = "chat";
+
+/// Distribution class of a bundled extension.
+///
+/// `Public` extensions ship in the open distribution and are documented as
+/// examples. `Private` extensions are kept in the repository (and can be
+/// bundled for an internal build) but are not part of the public catalog
+/// contract. The class is metadata: it never changes how the runtime loads or
+/// supervises an extension.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionVisibility {
+    #[default]
+    Public,
+    Private,
+}
+
+impl ExtensionVisibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExtensionVisibility::Public => "public",
+            ExtensionVisibility::Private => "private",
+        }
+    }
+}
 
 /// How a node-side extension is executed by the agent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +89,9 @@ pub struct ExtensionManifest {
     pub version: String,
     #[serde(default)]
     pub description: String,
+    /// Public/private classification used by the catalog and by packaging.
+    #[serde(default)]
+    pub visibility: ExtensionVisibility,
     #[serde(default)]
     pub author: String,
     #[serde(default)]
@@ -437,13 +465,25 @@ pub fn load_dir(root: &Path) -> LoadedManifests {
 }
 
 // The repository `extensions/` folder is the source of truth for bundled
-// extensions. It is embedded so a distributed binary still seeds them.
+// extensions. It is split into `public/` (shipped in the open distribution)
+// and `private/` (internal/operator-specific). The runtime layout stays flat:
+// `<data_dir>/extensions/<id>/`. Everything here is embedded so a distributed
+// binary still seeds the manifests and hook scripts.
 const CLOUDFLARED_MANIFEST_TOML: &str =
-    include_str!("../../../extensions/cloudflared/extension.toml");
-const SEANCE_MANIFEST_TOML: &str = include_str!("../../../extensions/seance/extension.toml");
-const SEANCE_INSTALL_SH: &str = include_str!("../../../extensions/seance/install.sh");
-const SEANCE_ACTIVATE_SH: &str = include_str!("../../../extensions/seance/activate.sh");
-const SEANCE_DEACTIVATE_SH: &str = include_str!("../../../extensions/seance/deactivate.sh");
+    include_str!("../../../extensions/public/cloudflared/extension.toml");
+const CHAT_MANIFEST_TOML: &str = include_str!("../../../extensions/public/chat/extension.toml");
+const CHAT_INSTALL_SH: &str = include_str!("../../../extensions/public/chat/install.sh");
+const CHAT_ACTIVATE_SH: &str = include_str!("../../../extensions/public/chat/activate.sh");
+const CHAT_DEACTIVATE_SH: &str = include_str!("../../../extensions/public/chat/deactivate.sh");
+const DEBUG_MANIFEST_TOML: &str = include_str!("../../../extensions/public/debug/extension.toml");
+const DEBUG_INSTALL_SH: &str = include_str!("../../../extensions/public/debug/install.sh");
+const DEBUG_ACTIVATE_SH: &str = include_str!("../../../extensions/public/debug/activate.sh");
+const DEBUG_DEACTIVATE_SH: &str = include_str!("../../../extensions/public/debug/deactivate.sh");
+const SEANCE_MANIFEST_TOML: &str =
+    include_str!("../../../extensions/private/seance/extension.toml");
+const SEANCE_INSTALL_SH: &str = include_str!("../../../extensions/private/seance/install.sh");
+const SEANCE_ACTIVATE_SH: &str = include_str!("../../../extensions/private/seance/activate.sh");
+const SEANCE_DEACTIVATE_SH: &str = include_str!("../../../extensions/private/seance/deactivate.sh");
 const EXTENSIONS_README: &str = include_str!("../../../extensions/README.md");
 
 /// Writes bundled extensions to disk. Existing files are left untouched so
@@ -451,10 +491,18 @@ const EXTENSIONS_README: &str = include_str!("../../../extensions/README.md");
 pub fn seed_builtin_manifests(root: &Path) -> std::io::Result<()> {
     seed_file(root, "README.md", EXTENSIONS_README, false, false)?;
     seed_file(root, "cloudflared/extension.toml", CLOUDFLARED_MANIFEST_TOML, false, false)?;
+    seed_file(root, "chat/extension.toml", CHAT_MANIFEST_TOML, false, false)?;
+    seed_file(root, "debug/extension.toml", DEBUG_MANIFEST_TOML, false, false)?;
     seed_file(root, "seance/extension.toml", SEANCE_MANIFEST_TOML, false, false)?;
     // Bundled hook scripts are managed assets: refresh them on boot so an
     // upgrade does not leave an old installer behind. Manifests are not
     // overwritten (operators tune them), and symlinks are never followed.
+    seed_file(root, "chat/install.sh", CHAT_INSTALL_SH, true, true)?;
+    seed_file(root, "chat/activate.sh", CHAT_ACTIVATE_SH, true, true)?;
+    seed_file(root, "chat/deactivate.sh", CHAT_DEACTIVATE_SH, true, true)?;
+    seed_file(root, "debug/install.sh", DEBUG_INSTALL_SH, true, true)?;
+    seed_file(root, "debug/activate.sh", DEBUG_ACTIVATE_SH, true, true)?;
+    seed_file(root, "debug/deactivate.sh", DEBUG_DEACTIVATE_SH, true, true)?;
     seed_file(root, "seance/install.sh", SEANCE_INSTALL_SH, true, true)?;
     seed_file(root, "seance/activate.sh", SEANCE_ACTIVATE_SH, true, true)?;
     seed_file(root, "seance/deactivate.sh", SEANCE_DEACTIVATE_SH, true, true)?;
@@ -500,6 +548,14 @@ pub fn builtin_cloudflared_manifest() -> ExtensionManifest {
         toml::from_str(CLOUDFLARED_MANIFEST_TOML).expect("manifesto cloudflared embutido válido");
     manifest.builtin = true;
     manifest
+}
+
+pub fn builtin_chat_manifest() -> ExtensionManifest {
+    toml::from_str(CHAT_MANIFEST_TOML).expect("manifesto chat embutido válido")
+}
+
+pub fn builtin_debug_manifest() -> ExtensionManifest {
+    toml::from_str(DEBUG_MANIFEST_TOML).expect("manifesto debug embutido válido")
 }
 
 pub fn builtin_seance_manifest() -> ExtensionManifest {
@@ -554,7 +610,7 @@ command = "hello"
             "# old"
         );
         let loaded = load_dir(dir.path());
-        assert_eq!(loaded.manifests.len(), 2);
+        assert_eq!(loaded.manifests.len(), 4);
         let m = loaded
             .manifests
             .iter()
@@ -564,12 +620,50 @@ command = "hello"
         assert!(!m.default_active);
         assert_eq!(m.node_driver, NodeDriver::Cloudflared);
         assert_eq!(m.ui_kind(), "cloudflared");
+        assert_eq!(m.visibility, ExtensionVisibility::Public);
+        let chat = loaded
+            .manifests
+            .iter()
+            .find(|manifest| manifest.id == "chat")
+            .expect("chat");
+        assert_eq!(chat.node_driver, NodeDriver::Exec);
+        assert_eq!(chat.visibility, ExtensionVisibility::Public);
+        assert_eq!(chat.default_config["command"], "/usr/local/bin/wm-chat");
+        assert_eq!(chat.default_config["args"][0], "--listen");
+        assert_eq!(chat.adapter.exposes[0].overlay_port, 8790);
+        assert_eq!(
+            chat.adapter.shares[0]
+                .rendered_name("chat", "mac_01.local")
+                .unwrap(),
+            "chat-mac-01-local"
+        );
+        assert!(chat.hooks.install.is_some());
+        assert!(dir.path().join("chat/install.sh").is_file());
+        let debug = loaded
+            .manifests
+            .iter()
+            .find(|manifest| manifest.id == "debug")
+            .expect("debug");
+        assert_eq!(debug.node_driver, NodeDriver::Exec);
+        assert_eq!(debug.visibility, ExtensionVisibility::Public);
+        assert_eq!(debug.default_config["command"], "/usr/local/bin/wm-debug");
+        assert_eq!(debug.default_config["args"][0], "--listen");
+        assert_eq!(debug.adapter.exposes[0].overlay_port, 8791);
+        assert_eq!(
+            debug.adapter.shares[0]
+                .rendered_name("debug", "mac_01.local")
+                .unwrap(),
+            "debug-mac-01-local"
+        );
+        assert!(debug.hooks.install.is_some());
+        assert!(dir.path().join("debug/install.sh").is_file());
         let seance = loaded
             .manifests
             .iter()
             .find(|manifest| manifest.id == "seance")
             .expect("seance");
         assert_eq!(seance.node_driver, NodeDriver::Exec);
+        assert_eq!(seance.visibility, ExtensionVisibility::Private);
         assert!(seance.default_config["command"].as_str().is_some());
         assert_eq!(seance.adapter.exposes[0].overlay_port, 8421);
         assert_eq!(
