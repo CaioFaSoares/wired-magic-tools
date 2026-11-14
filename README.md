@@ -40,16 +40,16 @@ flowchart LR
 
 O tap público é [CaioFaSoares/homebrew-tap](https://github.com/CaioFaSoares/homebrew-tap)
 e a instalação é `brew tap CaioFaSoares/tap && brew install CaioFaSoares/tap/wired-magic`
-(detalhes em [Homebrew](docs/homebrew.md)). A release `v0.1.4` já está publicada e a
+(detalhes em [Homebrew](docs/homebrew.md)). A release `v0.1.5` já está publicada e a
 fórmula está no tap; novas versões entram no tap pelo mesmo script. Os binários de
 demonstração em `dist/` não são releases do tap. A publicação local não gasta minutos
 do GitHub Actions; o workflow macOS é apenas um fallback manual.
 
 ```sh
 git status                      # a árvore precisa estar limpa
-scripts/publish_macos.sh --tag v0.1.4 --dry-run
+scripts/publish_macos.sh --tag v0.1.5 --dry-run
 # commit + git push, e então:
-scripts/publish_macos.sh --tag v0.1.4
+scripts/publish_macos.sh --tag v0.1.5
 ```
 
 Ao abrir `wm tui` instalado pelo tap, a TUI verifica e instala versões estáveis mais

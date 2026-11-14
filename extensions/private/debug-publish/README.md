@@ -11,7 +11,7 @@ No checkout do mantenedor, com `gh` autenticado e a tag já commitada/enviada:
 ```sh
 extensions/private/debug-publish/publish.sh --check
 extensions/private/debug-publish/publish.sh --yes
-extensions/private/debug-publish/publish.sh --tag v0.1.4 --create-tag --yes
+extensions/private/debug-publish/publish.sh --tag v0.1.5 --create-tag --yes
 extensions/private/debug-publish/publish.sh --local --yes
 ```
 

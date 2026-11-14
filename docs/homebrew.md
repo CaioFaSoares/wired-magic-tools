@@ -3,7 +3,7 @@
 ## Estado atual
 
 - Tap público: <https://github.com/CaioFaSoares/homebrew-tap>, branch `main`.
-- Release `v0.1.4` publicada e `Formula/wired-magic.rb` presente no tap. `brew tap`,
+- Release `v0.1.5` publicada e `Formula/wired-magic.rb` presente no tap. `brew tap`,
   `brew info` e `brew install` foram validados com o Homebrew 7.
 - O caminho recomendado compila e publica do seu Mac, sem gastar minutos de Actions e
   sem PAT/secret: o script usa o seu login local do `gh` para criar a release e
@@ -40,7 +40,7 @@ binário) e o commit precisa estar no GitHub antes da publicação real. Depois 
 commitar e enviar com `git push`:
 
 ```sh
-scripts/publish_macos.sh --tag v0.1.4
+scripts/publish_macos.sh --tag v0.1.5
 ```
 
 O script:
@@ -58,11 +58,11 @@ O script:
 Opções úteis:
 
 ```sh
-scripts/publish_macos.sh --tag v0.1.4 --dry-run          # compila e mostra o plano
-scripts/publish_macos.sh --tag v0.1.4 --arch host        # só a arquitetura deste Mac
-scripts/publish_macos.sh --tag v0.1.4 --binaries ./out   # usa out/wm-arm64 e out/wm-x86_64
-scripts/publish_macos.sh --tag v0.1.4 --from-release     # só atualiza o tap
-scripts/publish_macos.sh --tag v0.1.4 --no-tap           # só a release
+scripts/publish_macos.sh --tag v0.1.5 --dry-run          # compila e mostra o plano
+scripts/publish_macos.sh --tag v0.1.5 --arch host        # só a arquitetura deste Mac
+scripts/publish_macos.sh --tag v0.1.5 --binaries ./out   # usa out/wm-arm64 e out/wm-x86_64
+scripts/publish_macos.sh --tag v0.1.5 --from-release     # só atualiza o tap
+scripts/publish_macos.sh --tag v0.1.5 --no-tap           # só a release
 ```
 
 `--from-release` baixa os assets de uma release já publicada (por exemplo, a criada
