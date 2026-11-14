@@ -1,0 +1,52 @@
+# Extensão pública: debug_gui.
+#
+# Sobe um painel de performance do host e do processo `wm` em loopback
+# (127.0.0.1:8791). O adapter publica o share `debug-gui-<nó>` e expõe a porta no
+# overlay; não há exposição pública nem autenticação. Mantenha na malha.
+#
+# O sidecar é o próprio binário `wm`: o hook de ativação grava
+# /usr/local/bin/wm-debug-gui (painel) e /usr/local/bin/debug-discover (atalho
+# de `wm debug discover`). O padrão é a TUI `wm debug`.
+id = "debug_gui"
+name = "Debug público (GUI)"
+version = "0.1.0"
+description = "Painel web de performance do host e do processo wm: CPU, memória, discos, rede, processo e extensões locais."
+author = "wired-magic"
+homepage = "https://github.com/CaioFaSoares/wired-magic-tools/tree/main/extensions/public/debug_gui"
+visibility = "public"
+node_driver = "exec"
+ui = "generic"
+default_active = false
+
+[default_config]
+command = "/usr/local/bin/wm-debug-gui"
+args = ["--listen", "127.0.0.1:8791"]
+restart = "always"
+
+[config_example]
+command = "/usr/local/bin/wm-debug-gui"
+args = ["--listen", "127.0.0.1:8791", "--title", "Debug público"]
+restart = "always"
+
+[hooks.install]
+command = "{extension_dir}/install.sh"
+timeout_secs = 60
+
+[hooks.activate]
+command = "{extension_dir}/activate.sh"
+timeout_secs = 30
+
+[hooks.deactivate]
+command = "{extension_dir}/deactivate.sh"
+timeout_secs = 10
+
+[adapter]
+labels = { debug_gui = "true", debug_port = "8791" }
+exposes = [{ overlay_port = 8791, local_port = 8791 }]
+
+[[adapter.shares]]
+name = "debug-gui-{node}"
+port = 8791
+kind = "web"
+protocol = "tcp"
+description = "Painel web de performance do nó"

@@ -141,6 +141,59 @@
     });
   }
 
+  function renderExtensions(discovery) {
+    const body = $("extensions-body");
+    const entries = discovery && Array.isArray(discovery.entries) ? discovery.entries : [];
+    const newCount = discovery && Number.isFinite(discovery.new_count) ? discovery.new_count : 0;
+    const updatedCount =
+      discovery && Number.isFinite(discovery.updated_count) ? discovery.updated_count : 0;
+    setText(
+      "extensions-chip",
+      `${entries.length} local(is) · ${newCount} nova(s)${updatedCount ? ` · ${updatedCount} atualizada(s)` : ""}`,
+    );
+
+    const warnings = $("extensions-warnings");
+    const warningText =
+      discovery && Array.isArray(discovery.warnings) ? discovery.warnings.join(" · ") : "";
+    warnings.textContent = warningText;
+    warnings.hidden = warningText.length === 0;
+
+    if (entries.length === 0) {
+      emptyRow(body, "Nenhuma extensão local encontrada.", 5);
+      return;
+    }
+
+    const label = {
+      new: "nova",
+      updated: "atualizada",
+      invalid: "inválida",
+      known: "ok",
+    };
+    body.replaceChildren(
+      ...entries.map((entry) => {
+        const tr = document.createElement("tr");
+        const id = textCell(entry.name || entry.id);
+        id.append(element("span", "sub", entry.id));
+        const visibility = textCell(entry.visibility || "—");
+        const driver = textCell(entry.driver || "—");
+        const status = document.createElement("td");
+        const tag = element(
+          "span",
+          `tag tag-${entry.status || "known"}`,
+          label[entry.status] || entry.status || "ok",
+        );
+        status.append(tag);
+        const path = textCell(entry.path || "—");
+        if (entry.warning) {
+          path.title = entry.warning;
+          path.append(element("span", "sub", `⚠ ${entry.warning}`));
+        }
+        tr.append(id, visibility, driver, status, path);
+        return tr;
+      }),
+    );
+  }
+
   function renderSnapshot(snapshot) {
     if (!snapshot || !snapshot.host) return;
 
@@ -273,6 +326,8 @@
     }
 
     const sampled = new Date(snapshot.generated_at);
+    renderExtensions(snapshot.extensions);
+
     setText(
       "timestamp",
       Number.isNaN(sampled.getTime()) ? "amostra —" : `amostra ${timeFormat.format(sampled)}`,

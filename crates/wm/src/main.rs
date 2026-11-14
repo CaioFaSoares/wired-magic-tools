@@ -18,8 +18,12 @@ use wm_proto::{
 };
 
 mod chat;
+mod chat_tui;
 mod debug;
+mod debug_tui;
+mod discovery;
 mod gui;
+mod packages;
 mod service;
 
 #[derive(Parser)]
@@ -100,10 +104,18 @@ enum Command {
         #[command(subcommand)]
         action: Option<ExtensionsAction>,
     },
-    /// Serve a sala de chat público da extensão `chat`.
-    Chat(ChatArgs),
-    /// Serve o painel de performance da extensão `debug`.
+    /// Gerencia extensões a partir de repositórios git (estilo flake).
+    Packages(packages::PackagesArgs),
+    /// Abre o chat TUI (padrão), conectado a um `chat_gui`.
+    Chat(ChatTuiArgs),
+    /// Serve a interface web do chat (extensão `chat_gui`).
+    #[command(name = "chat_gui")]
+    ChatGui(ChatGuiArgs),
+    /// Abre o dashboard TUI de performance (padrão).
     Debug(DebugArgs),
+    /// Serve o painel web de performance (extensão `debug_gui`).
+    #[command(name = "debug_gui")]
+    DebugGui(DebugGuiArgs),
     /// Abre a TUI (o agente iniciado por ela continua rodando ao sair).
     Tui(TuiArgs),
     /// Diagnóstico da máquina e do nó.
@@ -247,7 +259,21 @@ enum ExtensionsAction {
 }
 
 #[derive(clap::Args)]
-struct ChatArgs {
+struct ChatTuiArgs {
+    /// URL do servidor chat_gui.
+    #[arg(
+        long,
+        default_value = "http://127.0.0.1:8790",
+        env = "WM_CHAT_URL"
+    )]
+    url: String,
+    /// Nome exibido nas mensagens.
+    #[arg(long, env = "WM_CHAT_AUTHOR")]
+    author: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct ChatGuiArgs {
     /// Endereço de escuta (loopback por padrão).
     #[arg(long, default_value = "127.0.0.1:8790", env = "WM_CHAT_LISTEN")]
     listen: SocketAddr,
@@ -261,6 +287,12 @@ struct ChatArgs {
 
 #[derive(clap::Args)]
 struct DebugArgs {
+    #[command(subcommand)]
+    action: Option<DebugAction>,
+}
+
+#[derive(clap::Args)]
+struct DebugGuiArgs {
     /// Endereço de escuta (loopback por padrão).
     #[arg(long, default_value = "127.0.0.1:8791", env = "WM_DEBUG_LISTEN")]
     listen: SocketAddr,
@@ -270,6 +302,28 @@ struct DebugArgs {
     /// Nome do nó exibido no cabeçalho (o hook de ativação preenche).
     #[arg(long, env = "WM_DEBUG_NODE")]
     node: Option<String>,
+}
+
+#[derive(clap::Subcommand)]
+enum DebugAction {
+    /// Descobre extensões locais e mostra o que é nova/atualizada.
+    Discover(DiscoverArgs),
+}
+
+#[derive(clap::Args)]
+struct DiscoverArgs {
+    /// Diretório para varrer (repetível). Padrão: <data-dir>/extensions e ./extensions.
+    #[arg(long = "dir", value_name = "DIR")]
+    dirs: Vec<PathBuf>,
+    /// Emite JSON em vez da tabela.
+    #[arg(long)]
+    json: bool,
+    /// Não grava o estado de descoberta.
+    #[arg(long)]
+    no_state: bool,
+    /// Janela, em horas, para marcar uma extensão como nova/atualizada.
+    #[arg(long, default_value_t = 24)]
+    window_hours: u64,
 }
 
 #[derive(clap::Args)]
@@ -366,8 +420,23 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Open { target, print } => run_open(&root, &target, print).await,
         Command::Gui(args) => gui::run(root, args.listen, !args.no_open).await,
         Command::Extensions { json, action } => run_extensions(&root, json, action).await,
-        Command::Chat(args) => chat::run(args.listen, args.title, args.node).await,
-        Command::Debug(args) => debug::run(args.listen, args.title, args.node).await,
+        Command::Packages(args) => packages::run(&root, args.action),
+        Command::Chat(args) => tokio::task::spawn_blocking(move || {
+            chat_tui::run(args.url, args.author)
+        })
+        .await?,
+        Command::ChatGui(args) => chat::run(args.listen, args.title, args.node).await,
+        Command::Debug(args) => match args.action {
+            Some(DebugAction::Discover(discover)) => discovery::discover_cli(
+                &root,
+                discover.dirs,
+                discover.json,
+                discover.no_state,
+                discover.window_hours,
+            ),
+            None => tokio::task::spawn_blocking(move || debug_tui::run(&root)).await?,
+        },
+        Command::DebugGui(args) => debug::run(root, args.listen, args.title, args.node).await,
         Command::Tui(args) => run_tui(&root, args).await,
         Command::Doctor => run_doctor(&root).await,
         Command::Service(args) => run_service(args, &root).await,
@@ -980,19 +1049,24 @@ async fn run_extensions(
             } else if catalog.is_empty() {
                 println!("nenhuma extensão no catálogo");
             } else {
-                println!("{:<20} {:<12} {:<6} {:<10} mensagem", "EXTENSÃO", "DRIVER", "ATIVA", "ESTADO");
+                println!(
+                    "{:<20} {:<12} {:<6} {:<10} {:<7} mensagem",
+                    "EXTENSÃO", "DRIVER", "ATIVA", "ESTADO", "PEDIDO"
+                );
                 for view in catalog {
                     let (state, message) = view
                         .status
                         .as_ref()
                         .map(|status| (status.state.to_string(), status.message.clone().unwrap_or_default()))
                         .unwrap_or_else(|| ("—".into(), String::new()));
+                    let requested = if view.requested { "sim" } else { "—" };
                     println!(
-                        "{:<20} {:<12} {:<6} {:<10} {}",
+                        "{:<20} {:<12} {:<6} {:<10} {:<7} {}",
                         view.id,
                         view.driver,
                         if view.active { "on" } else { "off" },
                         state,
+                        requested,
                         message
                     );
                 }

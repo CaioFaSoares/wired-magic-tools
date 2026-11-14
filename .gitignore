@@ -13,3 +13,9 @@ migrations/
 web/.pnpm-store/
 
 __pycache__/
+
+# Estado local do gerenciador/descoberta quando o data dir é o próprio repo.
+extensions/.debug-discovery.json
+extensions/.packages.json
+extensions/.packages.json.tmp
+extensions/.sources/

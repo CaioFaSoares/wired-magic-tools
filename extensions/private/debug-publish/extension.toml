@@ -1,0 +1,15 @@
+# Extensão privada: debug-publish.
+#
+# Ferramenta de operador, não é sidecar. O manifesto existe para o catálogo e
+# para o gerenciador de pacotes distribuir o script; a publicação em si é
+# executada no checkout do mantenedor, com `gh` autenticado.
+id = "debug-publish"
+name = "Debug Publish"
+version = "0.1.0"
+description = "Ferramenta privada de release: valida a tag e publica os artefatos no GitHub via workflow ou build local."
+author = "wired-magic"
+homepage = "https://github.com/CaioFaSoares/wired-magic-tools/tree/main/extensions/private/debug-publish"
+visibility = "private"
+node_driver = "none"
+ui = "generic"
+default_active = false

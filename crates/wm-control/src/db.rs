@@ -201,6 +201,16 @@ async fn init_schema(pool: &SqlitePool) -> anyhow::Result<()> {
             PRIMARY KEY (extension_id, node_id, resource)
         )",
         // Last status reported by each node for each extension.
+        // A server-side request for a node to run an extension. It is a
+        // recommendation, not an activation: the member still decides.
+        "CREATE TABLE IF NOT EXISTS extension_requests (
+            extension_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL,
+            updated_by TEXT,
+            PRIMARY KEY (extension_id, node_id)
+        )",
         "CREATE TABLE IF NOT EXISTS extension_status (
             extension_id TEXT NOT NULL,
             node_id TEXT NOT NULL,
@@ -253,6 +263,7 @@ async fn init_schema(pool: &SqlitePool) -> anyhow::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_join_tokens_hash ON join_tokens(token_hash)",
         "CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(ts DESC)",
         "CREATE INDEX IF NOT EXISTS idx_extension_status_extension ON extension_status(extension_id)",
+        "CREATE INDEX IF NOT EXISTS idx_extension_requests_node ON extension_requests(node_id)",
         "CREATE INDEX IF NOT EXISTS idx_cloudflared_routes_node ON cloudflared_routes(node_id)",
         "CREATE INDEX IF NOT EXISTS idx_shares_node ON shares(node_id)",
     ];

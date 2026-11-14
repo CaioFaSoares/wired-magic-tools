@@ -1,9 +1,9 @@
 #!/bin/sh
-# Hook de ativação da extensão pública `chat`.
+# Hook de ativação da extensão pública `chat_gui`.
 #
-# Grava o wrapper /usr/local/bin/wm-chat apontando para o binário do agente e
-# embute o nome atual do nó (o sidecar `exec` não herda WM_NODE_NAME). O
-# `default_config` do manifesto inicia esse wrapper na porta 127.0.0.1:8790.
+# Grava o wrapper /usr/local/bin/wm-chat-gui apontando para o binário do agente
+# e embute o nome atual do nó (o sidecar `exec` não herda WM_NODE_NAME). O
+# `default_config` inicia esse wrapper na porta 127.0.0.1:8790.
 set -eu
 
 find_wm() {
@@ -34,20 +34,20 @@ find_wm() {
 
 wm="$(find_wm || true)"
 if [ -z "$wm" ]; then
-  echo "chat: binário 'wm' não encontrado no nó." >&2
+  echo "chat_gui: binário 'wm' não encontrado no nó." >&2
   exit 1
 fi
 
 case "$wm" in
   /*) ;;
   *)
-    echo "chat: caminho do wm não é absoluto: $wm" >&2
+    echo "chat_gui: caminho do wm não é absoluto: $wm" >&2
     exit 1
     ;;
 esac
 case "$wm" in
   *[!A-Za-z0-9._/+@-]*)
-    echo "chat: caminho do wm incomum: $wm" >&2
+    echo "chat_gui: caminho do wm incomum: $wm" >&2
     exit 1
     ;;
 esac
@@ -58,19 +58,19 @@ case "$node" in
 esac
 
 install -d /usr/local/bin
-tmp="$(mktemp /usr/local/bin/wm-chat.XXXXXX)"
+tmp="$(mktemp /usr/local/bin/wm-chat-gui.XXXXXX)"
 trap 'rm -f "$tmp"' EXIT INT TERM
 {
   printf '#!/bin/sh\n'
-  printf 'exec "%s" chat' "$wm"
+  printf 'exec "%s" chat_gui' "$wm"
   if [ -n "$node" ]; then
     printf ' --node "%s"' "$node"
   fi
   printf ' "$@"\n'
 } > "$tmp"
 chmod 0755 "$tmp"
-mv -f "$tmp" /usr/local/bin/wm-chat
+mv -f "$tmp" /usr/local/bin/wm-chat-gui
 trap - EXIT INT TERM
 
 label="${node:-nó}"
-echo "chat: ativo em http://127.0.0.1:8790 (share chat-${label})"
+echo "chat_gui: ativo em http://127.0.0.1:8790 (share chat-gui-${label})"

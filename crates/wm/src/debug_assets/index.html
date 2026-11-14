@@ -148,6 +148,29 @@
             </div>
           </section>
 
+          <section class="card card-extensions" aria-labelledby="extensions-title">
+            <div class="card-head">
+              <div>
+                <p class="card-eyebrow">Descoberta local</p>
+                <h2 id="extensions-title">Extensões locais</h2>
+              </div>
+              <span id="extensions-chip" class="chip">—</span>
+            </div>
+            <p class="card-note">
+              Varredura automática de <code>&lt;data_dir&gt;/extensions</code> a cada 5 s.
+              “Nova” e “atualizada” usam a janela de 24 h de <code>debug-discover</code>.
+            </p>
+            <div class="table-wrap">
+              <table class="data">
+                <thead>
+                  <tr><th scope="col">ID</th><th scope="col">Visibilidade</th><th scope="col">Driver</th><th scope="col">Status</th><th scope="col">Caminho</th></tr>
+                </thead>
+                <tbody id="extensions-body"></tbody>
+              </table>
+            </div>
+            <p id="extensions-warnings" class="card-warnings" hidden></p>
+          </section>
+
           <section class="card card-processes" aria-labelledby="proc-title">
             <div class="card-head">
               <div>

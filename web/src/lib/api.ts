@@ -342,6 +342,18 @@ export const api = {
     );
   },
 
+  setExtensionRequest(
+    id: string,
+    nodeId: string,
+    requested: boolean,
+    message: string,
+  ): Promise<ExtensionNodeView> {
+    return request<ExtensionNodeView>(
+      `/admin/extensions/${encodeURIComponent(id)}/nodes/${encodeURIComponent(nodeId)}/request`,
+      { method: "PUT", body: { requested, message } },
+    );
+  },
+
   deleteExtensionNodeConfig(id: string, nodeId: string): Promise<ApiOk> {
     return request<ApiOk>(
       `/admin/extensions/${encodeURIComponent(id)}/nodes/${encodeURIComponent(nodeId)}/config`,

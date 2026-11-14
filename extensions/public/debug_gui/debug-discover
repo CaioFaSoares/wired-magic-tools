@@ -1,0 +1,40 @@
+#!/bin/sh
+# Atalho de descoberta de extensões locais.
+#
+# Instalado como /usr/local/bin/debug-discover pelo hook de ativação do
+# debug_gui. Também pode ser executado direto do checkout (defina WM_BIN se o
+# `wm` não estiver no PATH).
+set -eu
+
+find_wm() {
+  for candidate in "${WM_BIN:-}" "${WM_AGENT_BIN:-}" /usr/local/bin/wm /opt/homebrew/bin/wm /usr/bin/wm /snap/bin/wm; do
+    [ -n "$candidate" ] || continue
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  if command -v wm >/dev/null 2>&1; then
+    found="$(command -v wm)"
+    case "$found" in
+      /*)
+        printf '%s\n' "$found"
+        return 0
+        ;;
+    esac
+  fi
+  for home in /Users/* /home/*; do
+    if [ -x "$home/.cargo/bin/wm" ]; then
+      printf '%s\n' "$home/.cargo/bin/wm"
+      return 0
+    fi
+  done
+  return 1
+}
+
+wm="$(find_wm || true)"
+if [ -z "$wm" ]; then
+  echo "debug-discover: binário 'wm' não encontrado." >&2
+  exit 1
+fi
+exec "$wm" debug discover "$@"

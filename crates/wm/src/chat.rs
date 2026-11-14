@@ -1,8 +1,10 @@
 //! Public chat extension server (`wm chat`).
 //!
-//! The `chat` extension in `extensions/public/chat` is declarative: its
-//! `exec` sidecar runs `wm chat` on the node. This module is the server half —
-//! a tiny, dependency-light room with a static UI and a JSON API.
+//! The `chat_gui` extension in `extensions/public/chat_gui` is declarative: its
+//! `exec` sidecar runs `wm chat_gui` on the node. This module is the server
+//! half — a tiny, dependency-light room with a static web UI and a JSON API.
+//! The default chat client is the TUI `wm chat` (`chat` package), which uses
+//! these same endpoints.
 //!
 //! Design constraints:
 //!
@@ -332,7 +334,7 @@ pub async fn run(listen: SocketAddr, title: String, node: Option<String>) -> any
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("não foi possível escutar em {listen}"))?;
-    println!("chat: ouvindo em http://{listen}");
+    println!("chat_gui: ouvindo em http://{listen}");
     axum::serve(listener, app)
         .await
         .context("servidor de chat encerrou com erro")

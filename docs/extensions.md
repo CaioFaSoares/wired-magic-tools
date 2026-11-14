@@ -45,8 +45,9 @@ versão do mapa muda por causa de peers ou ACL.
 (`aba Extensões`, `Enter/t`), o painel web e a API alternam. Manifestos podem
 declarar `default_config` para que ativar já materialize a config. Hooks e
 adapters são detalhados em [hooks-adapters.md](hooks-adapters.md). A extensão
-`chat` é a receita pública de referência (sidecar + adapter + UI); `seance` é a
-integração privada que monta um produto no nó.
+`chat_gui`/`debug_gui` são as receitas públicas de referência (sidecar +
+adapter + UI web); `chat`/`debug` são as TUIs padrão embutidas no `wm` e
+`seance` é a integração privada que monta um produto no nó.
 
 O `ReportRequest` devolve o estado observado. O control guarda a última foto em
 `extension_status`, o painel faz merge e o SSE invalida as consultas. O
@@ -102,7 +103,8 @@ public_urls = ["https://hello.example.com"]
 
 Regras:
 
-- `id` é um slug `[a-z0-9-]`, igual ao diretório; nomes fora disso são ignorados.
+- `id` é um slug `[a-z0-9_-]`, igual ao diretório; nomes fora disso são ignorados.
+  O `_` permite variantes como `chat` (TUI) e `chat_gui` (web).
 - `builtin` não é escrito pelo autor: o loader decide pelo id.
 - `node_driver = "cloudflared"` é reservado ao id `cloudflared`.
 - Campos desconhecidos no TOML são rejeitados para evitar knob silencioso.
@@ -151,8 +153,8 @@ A pasta [`extensions/`](../extensions/) do repositório separa o catálogo abert
 do material interno:
 
 ```text
-extensions/public/     # cloudflared, chat, debug — distribuição aberta
-extensions/private/    # seance — interno/operador
+extensions/public/     # cloudflared, chat, chat_gui, debug, debug_gui
+extensions/private/    # seance, debug-publish
 ```
 
 O control continua semeando tudo em `<data_dir>/extensions/<id>/` (layout
@@ -160,14 +162,63 @@ plano). A classificação aparece no painel e vem do campo `visibility` do
 manifesto. Extensões públicas devem trazer um `README.md` com contrato e modelo
 de segurança; privadas não são documentadas como exemplo.
 
-As extensões `chat` e `debug` mostram o ciclo completo de uma extensão pública
-declarativa: sidecar `exec`, hook de ativação que prepara o wrapper, adapter com
-label + share + expose e uma UI própria servida pelo sidecar. Ambas são
-mesh-only: escutam em loopback e só são expostas no overlay, então um nó com
+As extensões `chat_gui` e `debug_gui` mostram o ciclo completo de uma extensão
+pública declarativa: sidecar `exec`, hook de ativação que prepara o wrapper,
+adapter com label + share + expose e uma UI própria servida pelo sidecar. Ambas
+são mesh-only: escutam em loopback e só são expostas no overlay, então um nó com
 portas públicas fechadas continua acessando o serviço do nó servidor pelo
-túnel da malha. Guias em
+túnel da malha. As TUIs `wm chat` e `wm debug` (`chat`/`debug`,
+`node_driver = "none"`) consomem a mesma API local ou o sampler local. Guias em
+[`extensions/public/chat_gui/README.md`](../extensions/public/chat_gui/README.md),
+[`extensions/public/debug_gui/README.md`](../extensions/public/debug_gui/README.md),
 [`extensions/public/chat/README.md`](../extensions/public/chat/README.md) e
 [`extensions/public/debug/README.md`](../extensions/public/debug/README.md).
+
+### 2.3 Pedidos do servidor
+
+O admin pode pedir que um nó rode uma extensão:
+
+```http
+PUT /api/v1/admin/extensions/chat_gui/nodes/{node_id}/request
+{ "requested": true, "message": "rode o chat_gui neste nó" }
+```
+
+A solicitação é uma **recomendação**: aparece no catálogo do nó
+(`NodeExtensionView.requested`/`request_message`) com `!` na TUI, mas não ativa
+nem executa nada. `requested: false` remove. A ativação continua sendo uma
+decisão do membro.
+
+### 2.4 Gerenciador de pacotes (git, estilo flake)
+
+Um repositório git é uma fonte de pacotes. Qualquer subdiretório com
+`extension.toml` é um pacote; opcionalmente, `wm-flake.toml` na raiz lista os
+pacotes:
+
+```toml
+[flake]
+name = "acme-extensions"
+version = "1"
+
+[[package]]
+id = "chat_gui"
+path = "packages/chat_gui"
+```
+
+```sh
+wm packages discover github:owner/repo
+wm packages install  github:owner/repo --package chat_gui --yes
+wm packages install  github:owner/repo --ref v1.2.0 --subdir packages --all --yes
+wm packages list
+wm packages update
+wm packages remove chat_gui --yes
+```
+
+O clone vai para `<data_dir>/extensions/.sources/<nome>`, o pacote é copiado
+para `<data_dir>/extensions/<id>/` e o lock
+`<data_dir>/extensions/.packages.json` registra URL, ref, commit e subdir.
+`--yes` confirma a execução de código; `--dry-run` só mostra. O gerenciador não
+resolve `inputs`/dependências de outros flakes automaticamente e não avalia
+Nix: o “flake” aqui é o contrato repo + ref + subdir + `extension.toml`.
 
 > **Modelo de confiança:** só um admin do control pode gravar configuração, e a
 > extensão roda com o privilégio do agente. Trate o JSON de `exec` como uma unit
@@ -389,6 +440,7 @@ Mesmo sem código, toda extensão ganha:
 | PUT | `/api/v1/admin/extensions/{id}/nodes/{node_id}/config` |
 | DELETE | `/api/v1/admin/extensions/{id}/nodes/{node_id}/config` |
 | PUT | `/api/v1/admin/extensions/{id}/nodes/{node_id}/activation` |
+| PUT | `/api/v1/admin/extensions/{id}/nodes/{node_id}/request` |
 | GET | `/api/v1/node/extensions` |
 | PUT | `/api/v1/node/extensions/{id}` |
 
@@ -400,8 +452,9 @@ Extensões code-backed podem recusar a config genérica e expor a própria API
 ## 5. Modelo de dados
 
 ```sql
-extension_records  (extension_id, node_id, enabled, config, revision, updated_at, updated_by)
-extension_status   (extension_id, node_id, name, driver, state, message, public_urls, details, updated_at)
+extension_records   (extension_id, node_id, enabled, config, revision, updated_at, updated_by)
+extension_requests  (extension_id, node_id, message, updated_at, updated_by)
+extension_status    (extension_id, node_id, name, driver, state, message, public_urls, details, updated_at)
 cloudflared_routes (id, project, node_id, local_url, mode, hostname, enabled, created_at, updated_at)
 cloudflared_nodes  (node_id, binary, tunnel_id, credentials, revision, updated_at)
 ```

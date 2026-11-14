@@ -888,3 +888,104 @@ pub async fn delete_adapter_resource(
     .await?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Server requests ("o servidor pediu para rodar esta extensão")
+// ---------------------------------------------------------------------------
+
+pub struct ExtensionRequestRow {
+    pub extension_id: String,
+    pub node_id: String,
+    pub message: String,
+    pub updated_at: i64,
+    pub updated_by: Option<String>,
+}
+
+impl_from_row!(ExtensionRequestRow {
+    extension_id,
+    node_id,
+    message,
+    updated_at,
+    updated_by
+});
+
+/// Creates or removes a request. An absent row means "não solicitada".
+pub async fn set_request(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+    requested: bool,
+    message: &str,
+    updated_by: &str,
+) -> anyhow::Result<()> {
+    if requested {
+        sqlx::query(
+            "INSERT INTO extension_requests(extension_id, node_id, message, updated_at, updated_by)
+             VALUES(?,?,?,?,?)
+             ON CONFLICT(extension_id, node_id) DO UPDATE SET
+               message = excluded.message,
+               updated_at = excluded.updated_at,
+               updated_by = excluded.updated_by",
+        )
+        .bind(extension_id)
+        .bind(node_id.to_string())
+        .bind(message)
+        .bind(now_ts())
+        .bind(updated_by)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query("DELETE FROM extension_requests WHERE extension_id = ? AND node_id = ?")
+            .bind(extension_id)
+            .bind(node_id.to_string())
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn get_request(
+    pool: &SqlitePool,
+    extension_id: &str,
+    node_id: Uuid,
+) -> anyhow::Result<Option<ExtensionRequestRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM extension_requests WHERE extension_id = ? AND node_id = ?",
+    )
+    .bind(extension_id)
+    .bind(node_id.to_string())
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Requests for one node, keyed by extension id.
+pub async fn requests_for_node(
+    pool: &SqlitePool,
+    node_id: Uuid,
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let rows: Vec<ExtensionRequestRow> =
+        sqlx::query_as("SELECT * FROM extension_requests WHERE node_id = ?")
+            .bind(node_id.to_string())
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.extension_id, row.message))
+        .collect())
+}
+
+/// All requests for one extension, keyed by node id.
+pub async fn requests_for_extension(
+    pool: &SqlitePool,
+    extension_id: &str,
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let rows: Vec<ExtensionRequestRow> =
+        sqlx::query_as("SELECT * FROM extension_requests WHERE extension_id = ?")
+            .bind(extension_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.node_id, row.message))
+        .collect())
+}

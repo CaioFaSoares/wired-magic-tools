@@ -1,0 +1,16 @@
+# Fonte de pacotes privada (não distribuída no catálogo público).
+#
+#   wm packages discover extensions/private
+#   wm packages install  extensions/private --package seance --yes
+[flake]
+name = "wired-magic-private"
+version = "0.1.2"
+description = "Extensões internas do operador."
+
+[[package]]
+id = "seance"
+path = "seance"
+
+[[package]]
+id = "debug-publish"
+path = "debug-publish"

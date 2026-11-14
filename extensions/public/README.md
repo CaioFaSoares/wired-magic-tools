@@ -5,5 +5,7 @@ documentado. Use `visibility = "public"` no manifesto, mantenha um `README.md`
 com o contrato e o modelo de segurança, e evite segredos ou endpoints internos.
 
 - `cloudflared/` — rotas de projeto para quick/named tunnel.
-- `chat/` — sala de chat web por nó, com share na malha e porta exposta.
-- `debug/` — painel de performance do host e do processo `wm`.
+- `chat/` — TUI de chat (`node_driver = "none"`).
+- `chat_gui/` — servidor web do chat, share `chat-gui-<nó>`.
+- `debug/` — TUI de performance e descoberta (`node_driver = "none"`).
+- `debug_gui/` — painel web, share `debug-gui-<nó>` e `debug-discover`.

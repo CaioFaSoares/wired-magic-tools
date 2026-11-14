@@ -1,0 +1,53 @@
+# Extensão pública: chat_gui.
+#
+# Sobe uma sala de chat web no nó, escutando apenas em loopback
+# (127.0.0.1:8790). O adapter publica o share `chat-gui-<nó>` na malha e expõe a
+# porta no overlay: o chat é acessado pelo túnel da malha, sem abrir porta
+# pública e sem depender de outras portas do nó. Mantenha-o na malha.
+#
+# O sidecar é o próprio binário `wm`: o hook de ativação grava um wrapper em
+# /usr/local/bin/wm-chat-gui que executa `wm chat_gui`. O cliente padrão é a TUI
+# `wm chat` (pacote `chat`), que usa a mesma API HTTP.
+id = "chat_gui"
+name = "Chat público (GUI)"
+version = "0.1.0"
+description = "Interface web do chat por nó, acessível pela malha, sem abrir porta pública."
+author = "wired-magic"
+homepage = "https://github.com/CaioFaSoares/wired-magic-tools/tree/main/extensions/public/chat_gui"
+visibility = "public"
+node_driver = "exec"
+ui = "generic"
+default_active = false
+
+[default_config]
+command = "/usr/local/bin/wm-chat-gui"
+args = ["--listen", "127.0.0.1:8790"]
+restart = "always"
+
+[config_example]
+command = "/usr/local/bin/wm-chat-gui"
+args = ["--listen", "127.0.0.1:8790", "--title", "Chat público"]
+restart = "always"
+
+[hooks.install]
+command = "{extension_dir}/install.sh"
+timeout_secs = 60
+
+[hooks.activate]
+command = "{extension_dir}/activate.sh"
+timeout_secs = 30
+
+[hooks.deactivate]
+command = "{extension_dir}/deactivate.sh"
+timeout_secs = 10
+
+[adapter]
+labels = { chat_gui = "true", chat_port = "8790" }
+exposes = [{ overlay_port = 8790, local_port = 8790 }]
+
+[[adapter.shares]]
+name = "chat-gui-{node}"
+port = 8790
+kind = "web"
+protocol = "tcp"
+description = "Chat público (GUI) do nó"

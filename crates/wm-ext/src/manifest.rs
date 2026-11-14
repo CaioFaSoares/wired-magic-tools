@@ -266,7 +266,7 @@ impl ExtensionManifest {
     pub fn validate(&self) -> Result<(), String> {
         if !valid_id(&self.id) {
             return Err(format!(
-                "id inválido '{}': use 1-63 caracteres [a-z0-9-]",
+                "id inválido '{}': use 1-63 caracteres [a-z0-9_-]",
                 self.id
             ));
         }
@@ -377,9 +377,9 @@ pub fn valid_id(id: &str) -> bool {
     !bytes.is_empty()
         && bytes.len() <= 63
         && bytes[0].is_ascii_lowercase()
-        && bytes
-            .iter()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+        && bytes.iter().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-' || *b == b'_'
+        })
 }
 
 pub fn is_builtin_id(id: &str) -> bool {
@@ -471,14 +471,28 @@ pub fn load_dir(root: &Path) -> LoadedManifests {
 // binary still seeds the manifests and hook scripts.
 const CLOUDFLARED_MANIFEST_TOML: &str =
     include_str!("../../../extensions/public/cloudflared/extension.toml");
-const CHAT_MANIFEST_TOML: &str = include_str!("../../../extensions/public/chat/extension.toml");
-const CHAT_INSTALL_SH: &str = include_str!("../../../extensions/public/chat/install.sh");
-const CHAT_ACTIVATE_SH: &str = include_str!("../../../extensions/public/chat/activate.sh");
-const CHAT_DEACTIVATE_SH: &str = include_str!("../../../extensions/public/chat/deactivate.sh");
-const DEBUG_MANIFEST_TOML: &str = include_str!("../../../extensions/public/debug/extension.toml");
-const DEBUG_INSTALL_SH: &str = include_str!("../../../extensions/public/debug/install.sh");
-const DEBUG_ACTIVATE_SH: &str = include_str!("../../../extensions/public/debug/activate.sh");
-const DEBUG_DEACTIVATE_SH: &str = include_str!("../../../extensions/public/debug/deactivate.sh");
+const CHAT_TUI_MANIFEST_TOML: &str =
+    include_str!("../../../extensions/public/chat/extension.toml");
+const CHAT_GUI_MANIFEST_TOML: &str =
+    include_str!("../../../extensions/public/chat_gui/extension.toml");
+const CHAT_GUI_INSTALL_SH: &str =
+    include_str!("../../../extensions/public/chat_gui/install.sh");
+const CHAT_GUI_ACTIVATE_SH: &str =
+    include_str!("../../../extensions/public/chat_gui/activate.sh");
+const CHAT_GUI_DEACTIVATE_SH: &str =
+    include_str!("../../../extensions/public/chat_gui/deactivate.sh");
+const DEBUG_TUI_MANIFEST_TOML: &str =
+    include_str!("../../../extensions/public/debug/extension.toml");
+const DEBUG_GUI_MANIFEST_TOML: &str =
+    include_str!("../../../extensions/public/debug_gui/extension.toml");
+const DEBUG_GUI_INSTALL_SH: &str =
+    include_str!("../../../extensions/public/debug_gui/install.sh");
+const DEBUG_GUI_ACTIVATE_SH: &str =
+    include_str!("../../../extensions/public/debug_gui/activate.sh");
+const DEBUG_GUI_DEACTIVATE_SH: &str =
+    include_str!("../../../extensions/public/debug_gui/deactivate.sh");
+const DEBUG_DISCOVER_SH: &str =
+    include_str!("../../../extensions/public/debug_gui/debug-discover");
 const SEANCE_MANIFEST_TOML: &str =
     include_str!("../../../extensions/private/seance/extension.toml");
 const SEANCE_INSTALL_SH: &str = include_str!("../../../extensions/private/seance/install.sh");
@@ -491,18 +505,21 @@ const EXTENSIONS_README: &str = include_str!("../../../extensions/README.md");
 pub fn seed_builtin_manifests(root: &Path) -> std::io::Result<()> {
     seed_file(root, "README.md", EXTENSIONS_README, false, false)?;
     seed_file(root, "cloudflared/extension.toml", CLOUDFLARED_MANIFEST_TOML, false, false)?;
-    seed_file(root, "chat/extension.toml", CHAT_MANIFEST_TOML, false, false)?;
-    seed_file(root, "debug/extension.toml", DEBUG_MANIFEST_TOML, false, false)?;
+    seed_file(root, "chat/extension.toml", CHAT_TUI_MANIFEST_TOML, false, false)?;
+    seed_file(root, "chat_gui/extension.toml", CHAT_GUI_MANIFEST_TOML, false, false)?;
+    seed_file(root, "debug/extension.toml", DEBUG_TUI_MANIFEST_TOML, false, false)?;
+    seed_file(root, "debug_gui/extension.toml", DEBUG_GUI_MANIFEST_TOML, false, false)?;
     seed_file(root, "seance/extension.toml", SEANCE_MANIFEST_TOML, false, false)?;
     // Bundled hook scripts are managed assets: refresh them on boot so an
     // upgrade does not leave an old installer behind. Manifests are not
     // overwritten (operators tune them), and symlinks are never followed.
-    seed_file(root, "chat/install.sh", CHAT_INSTALL_SH, true, true)?;
-    seed_file(root, "chat/activate.sh", CHAT_ACTIVATE_SH, true, true)?;
-    seed_file(root, "chat/deactivate.sh", CHAT_DEACTIVATE_SH, true, true)?;
-    seed_file(root, "debug/install.sh", DEBUG_INSTALL_SH, true, true)?;
-    seed_file(root, "debug/activate.sh", DEBUG_ACTIVATE_SH, true, true)?;
-    seed_file(root, "debug/deactivate.sh", DEBUG_DEACTIVATE_SH, true, true)?;
+    seed_file(root, "chat_gui/install.sh", CHAT_GUI_INSTALL_SH, true, true)?;
+    seed_file(root, "chat_gui/activate.sh", CHAT_GUI_ACTIVATE_SH, true, true)?;
+    seed_file(root, "chat_gui/deactivate.sh", CHAT_GUI_DEACTIVATE_SH, true, true)?;
+    seed_file(root, "debug_gui/install.sh", DEBUG_GUI_INSTALL_SH, true, true)?;
+    seed_file(root, "debug_gui/activate.sh", DEBUG_GUI_ACTIVATE_SH, true, true)?;
+    seed_file(root, "debug_gui/deactivate.sh", DEBUG_GUI_DEACTIVATE_SH, true, true)?;
+    seed_file(root, "debug_gui/debug-discover", DEBUG_DISCOVER_SH, true, true)?;
     seed_file(root, "seance/install.sh", SEANCE_INSTALL_SH, true, true)?;
     seed_file(root, "seance/activate.sh", SEANCE_ACTIVATE_SH, true, true)?;
     seed_file(root, "seance/deactivate.sh", SEANCE_DEACTIVATE_SH, true, true)?;
@@ -550,12 +567,20 @@ pub fn builtin_cloudflared_manifest() -> ExtensionManifest {
     manifest
 }
 
-pub fn builtin_chat_manifest() -> ExtensionManifest {
-    toml::from_str(CHAT_MANIFEST_TOML).expect("manifesto chat embutido válido")
+pub fn builtin_chat_tui_manifest() -> ExtensionManifest {
+    toml::from_str(CHAT_TUI_MANIFEST_TOML).expect("manifesto chat TUI embutido válido")
 }
 
-pub fn builtin_debug_manifest() -> ExtensionManifest {
-    toml::from_str(DEBUG_MANIFEST_TOML).expect("manifesto debug embutido válido")
+pub fn builtin_chat_gui_manifest() -> ExtensionManifest {
+    toml::from_str(CHAT_GUI_MANIFEST_TOML).expect("manifesto chat_gui embutido válido")
+}
+
+pub fn builtin_debug_tui_manifest() -> ExtensionManifest {
+    toml::from_str(DEBUG_TUI_MANIFEST_TOML).expect("manifesto debug TUI embutido válido")
+}
+
+pub fn builtin_debug_gui_manifest() -> ExtensionManifest {
+    toml::from_str(DEBUG_GUI_MANIFEST_TOML).expect("manifesto debug_gui embutido válido")
 }
 
 pub fn builtin_seance_manifest() -> ExtensionManifest {
@@ -610,7 +635,7 @@ command = "hello"
             "# old"
         );
         let loaded = load_dir(dir.path());
-        assert_eq!(loaded.manifests.len(), 4);
+        assert_eq!(loaded.manifests.len(), 6);
         let m = loaded
             .manifests
             .iter()
@@ -625,38 +650,61 @@ command = "hello"
             .manifests
             .iter()
             .find(|manifest| manifest.id == "chat")
-            .expect("chat");
-        assert_eq!(chat.node_driver, NodeDriver::Exec);
+            .expect("chat TUI");
+        assert_eq!(chat.node_driver, NodeDriver::None);
         assert_eq!(chat.visibility, ExtensionVisibility::Public);
-        assert_eq!(chat.default_config["command"], "/usr/local/bin/wm-chat");
-        assert_eq!(chat.default_config["args"][0], "--listen");
-        assert_eq!(chat.adapter.exposes[0].overlay_port, 8790);
+        assert!(chat.hooks.install.is_none());
+        let chat_gui = loaded
+            .manifests
+            .iter()
+            .find(|manifest| manifest.id == "chat_gui")
+            .expect("chat_gui");
+        assert_eq!(chat_gui.node_driver, NodeDriver::Exec);
+        assert_eq!(chat_gui.visibility, ExtensionVisibility::Public);
         assert_eq!(
-            chat.adapter.shares[0]
-                .rendered_name("chat", "mac_01.local")
-                .unwrap(),
-            "chat-mac-01-local"
+            chat_gui.default_config["command"],
+            "/usr/local/bin/wm-chat-gui"
         );
-        assert!(chat.hooks.install.is_some());
-        assert!(dir.path().join("chat/install.sh").is_file());
+        assert_eq!(chat_gui.default_config["args"][0], "--listen");
+        assert_eq!(chat_gui.adapter.exposes[0].overlay_port, 8790);
+        assert_eq!(
+            chat_gui.adapter.shares[0]
+                .rendered_name("chat_gui", "mac_01.local")
+                .unwrap(),
+            "chat-gui-mac-01-local"
+        );
+        assert!(chat_gui.hooks.install.is_some());
+        assert!(dir.path().join("chat_gui/install.sh").is_file());
         let debug = loaded
             .manifests
             .iter()
             .find(|manifest| manifest.id == "debug")
-            .expect("debug");
-        assert_eq!(debug.node_driver, NodeDriver::Exec);
+            .expect("debug TUI");
+        assert_eq!(debug.node_driver, NodeDriver::None);
         assert_eq!(debug.visibility, ExtensionVisibility::Public);
-        assert_eq!(debug.default_config["command"], "/usr/local/bin/wm-debug");
-        assert_eq!(debug.default_config["args"][0], "--listen");
-        assert_eq!(debug.adapter.exposes[0].overlay_port, 8791);
+        assert!(debug.hooks.install.is_none());
+        let debug_gui = loaded
+            .manifests
+            .iter()
+            .find(|manifest| manifest.id == "debug_gui")
+            .expect("debug_gui");
+        assert_eq!(debug_gui.node_driver, NodeDriver::Exec);
+        assert_eq!(debug_gui.visibility, ExtensionVisibility::Public);
         assert_eq!(
-            debug.adapter.shares[0]
-                .rendered_name("debug", "mac_01.local")
-                .unwrap(),
-            "debug-mac-01-local"
+            debug_gui.default_config["command"],
+            "/usr/local/bin/wm-debug-gui"
         );
-        assert!(debug.hooks.install.is_some());
-        assert!(dir.path().join("debug/install.sh").is_file());
+        assert_eq!(debug_gui.default_config["args"][0], "--listen");
+        assert_eq!(debug_gui.adapter.exposes[0].overlay_port, 8791);
+        assert_eq!(
+            debug_gui.adapter.shares[0]
+                .rendered_name("debug_gui", "mac_01.local")
+                .unwrap(),
+            "debug-gui-mac-01-local"
+        );
+        assert!(debug_gui.hooks.install.is_some());
+        assert!(dir.path().join("debug_gui/install.sh").is_file());
+        assert!(dir.path().join("debug_gui/debug-discover").is_file());
         let seance = loaded
             .manifests
             .iter()
@@ -708,6 +756,7 @@ command = "hello"
     fn id_rules_are_strict() {
         assert!(valid_id("cloudflared"));
         assert!(valid_id("my-ext-2"));
+        assert!(valid_id("chat_gui"));
         assert!(!valid_id("MyExt"));
         assert!(!valid_id("-nope"));
         assert!(!valid_id("with space"));

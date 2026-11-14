@@ -110,6 +110,26 @@ export function ExtensionDetailPage() {
       push({ tone: "error", title: "Falha ao alterar ativação", description: errorMessage(error) }),
   });
 
+  const requestMutation = useMutation({
+    mutationFn: ({ node, requested }: { node: ExtensionNodeView; requested: boolean }) =>
+      api.setExtensionRequest(
+        extensionId,
+        node.node_id,
+        requested,
+        requested ? "O servidor pediu para rodar esta extensão." : "",
+      ),
+    onSuccess: (_result, variables) => {
+      invalidateExtensionQueries(queryClient);
+      push({
+        tone: "ok",
+        title: variables.requested ? "Extensão solicitada" : "Solicitação removida",
+        description: `${variables.node.node_name} · o membro verá o pedido no catálogo`,
+      });
+    },
+    onError: (error) =>
+      push({ tone: "error", title: "Falha na solicitação", description: errorMessage(error) }),
+  });
+
   const removeMutation = useMutation({
     mutationFn: (node: ExtensionNodeView) =>
       api.deleteExtensionNodeConfig(extensionId, node.node_id),
@@ -259,6 +279,7 @@ export function ExtensionDetailPage() {
                   <th scope="col">Nó</th>
                   <th scope="col">Ativa</th>
                   <th scope="col">Revisão</th>
+                  <th scope="col">Solicitação</th>
                   <th scope="col">Status</th>
                   <th scope="col">Config</th>
                   <th scope="col">Atualizado</th>
@@ -279,6 +300,18 @@ export function ExtensionDetailPage() {
                       </div>
                     </td>
                     <td className="font-mono text-xs text-muted">r{node.revision}</td>
+                    <td>
+                      {node.requested ? (
+                        <Badge tone="info">solicitada</Badge>
+                      ) : (
+                        <Badge tone="neutral">—</Badge>
+                      )}
+                      {node.request_message ? (
+                        <p className="mt-0.5 max-w-[200px] text-[10px] leading-4 text-faint">
+                          {node.request_message}
+                        </p>
+                      ) : null}
+                    </td>
                     <td>
                       {statusBadge(node.status)}
                       {node.status?.message ? (
@@ -301,6 +334,19 @@ export function ExtensionDetailPage() {
                           }
                         >
                           {node.active ? "Desativar" : "Ativar"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            requestMutation.mutate({ node, requested: !node.requested })
+                          }
+                          loading={
+                            requestMutation.isPending &&
+                            requestMutation.variables?.node.node_id === node.node_id
+                          }
+                        >
+                          {node.requested ? "Cancelar pedido" : "Solicitar"}
                         </Button>
                         <Button size="sm" variant="secondary" onClick={() => openEditor(node)}>
                           <Save aria-hidden="true" className="size-3.5" />

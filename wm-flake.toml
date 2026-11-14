@@ -1,0 +1,33 @@
+# Fonte de pacotes estilo flake do wired-magic.
+#
+# Um repositório pode declarar seus pacotes aqui; sem este arquivo, o
+# gerenciador descobre qualquer `extension.toml` recursivamente. Instale com:
+#
+#   wm packages discover github:CaioFaSoares/wired-magic-tools
+#   wm packages install  github:CaioFaSoares/wired-magic-tools --package chat_gui --yes
+#
+# O lockfile registra URL, ref, commit e subdiretório para updates reproduzíveis.
+[flake]
+name = "wired-magic-tools"
+version = "0.1.2"
+description = "Extensões oficiais do wired-magic: chat TUI/GUI, debug TUI/GUI e cloudflared."
+
+[[package]]
+id = "chat"
+path = "extensions/public/chat"
+
+[[package]]
+id = "chat_gui"
+path = "extensions/public/chat_gui"
+
+[[package]]
+id = "debug"
+path = "extensions/public/debug"
+
+[[package]]
+id = "debug_gui"
+path = "extensions/public/debug_gui"
+
+[[package]]
+id = "cloudflared"
+path = "extensions/public/cloudflared"

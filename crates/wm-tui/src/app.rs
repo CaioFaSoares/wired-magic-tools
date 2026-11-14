@@ -429,6 +429,9 @@ pub struct App {
     pub shares: Vec<ShareInfo>,
     pub extensions: Vec<ExtensionStatus>,
     pub extension_catalog: Vec<NodeExtensionView>,
+    /// Catálogo local lido de `<data_dir>/extensions`, disponível offline.
+    pub local_catalog: Vec<crate::catalog::Entry>,
+    pub catalog_error: Option<String>,
     pub node: Option<EnrolledNode>,
     /// Why `agent-state.json` could not be read (permissions/parse), if so.
     pub node_error: Option<String>,
@@ -494,6 +497,8 @@ impl App {
             shares: Vec::new(),
             extensions: Vec::new(),
             extension_catalog: Vec::new(),
+            local_catalog: Vec::new(),
+            catalog_error: None,
             node: None,
             node_error: None,
             live: false,
@@ -820,6 +825,8 @@ impl App {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: crate::Snapshot) {
+        self.local_catalog = snapshot.local_catalog;
+        self.catalog_error = snapshot.catalog_error;
         self.error = snapshot.error;
         if let Some(status) = snapshot.status {
             if self.node.is_none() {
@@ -1221,6 +1228,8 @@ mod tests {
             shares: vec![share.clone()],
             extensions: Vec::new(),
             extension_catalog: Vec::new(),
+            local_catalog: Vec::new(),
+            catalog_error: None,
             error: None,
             log: vec!["linha".into()],
             pid: Some(123),
@@ -1234,6 +1243,8 @@ mod tests {
             shares: Vec::new(),
             extensions: Vec::new(),
             extension_catalog: Vec::new(),
+            local_catalog: Vec::new(),
+            catalog_error: None,
             error: Some("socket fora".into()),
             log: Vec::new(),
             pid: None,
@@ -1262,6 +1273,8 @@ mod tests {
             shares: vec![sample_share()],
             extensions: Vec::new(),
             extension_catalog: Vec::new(),
+            local_catalog: Vec::new(),
+            catalog_error: None,
             error: None,
             log: Vec::new(),
             pid: Some(77),

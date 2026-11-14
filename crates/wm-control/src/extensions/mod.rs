@@ -254,6 +254,7 @@ impl ExtensionRegistry {
                 .into_iter()
                 .map(|row| (row.extension_id.clone(), row.view()))
                 .collect();
+        let requests = store::requests_for_node(&state.db, node.uuid()).await?;
         let mut out = Vec::new();
         for manifest in self.manifests() {
             let active = self.is_active(state, &manifest, node).await?;
@@ -277,6 +278,8 @@ impl ExtensionRegistry {
                 configured,
                 activation_revision,
                 default_config: !manifest.default_config.is_null(),
+                requested: requests.contains_key(&manifest.id),
+                request_message: requests.get(&manifest.id).cloned(),
                 status: statuses.get(&manifest.id).cloned(),
             });
         }
@@ -446,6 +449,7 @@ impl ExtensionRegistry {
         } else {
             Vec::new()
         };
+        let requests = store::requests_for_extension(&state.db, id).await?;
         let mut node_views = Vec::with_capacity(nodes.len());
         for node in nodes {
             let node_id = node.id.clone();
@@ -497,6 +501,8 @@ impl ExtensionRegistry {
                 activation_revision,
                 revision,
                 config,
+                requested: requests.contains_key(&node_id),
+                request_message: requests.get(&node_id).cloned(),
                 status: statuses.get(&node_id).cloned(),
                 updated_at: enabled.then_some(updated_at),
             });
@@ -574,6 +580,11 @@ pub struct ExtensionNodeView {
     pub activation_revision: u64,
     pub revision: u64,
     pub config: serde_json::Value,
+    /// O servidor pediu que o nó rode esta extensão (recomendação).
+    #[serde(default)]
+    pub requested: bool,
+    #[serde(default)]
+    pub request_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<ExtensionStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -596,6 +607,14 @@ pub struct ReloadResult {
 #[derive(Debug, Deserialize)]
 pub struct ActivationInput {
     pub active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RequestInput {
+    #[serde(default)]
+    pub requested: bool,
+    #[serde(default)]
+    pub message: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +816,68 @@ fn validate_generic_config(
     }
 }
 
+pub async fn put_request(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    headers: axum::http::HeaderMap,
+    AxumPath((id, node_id)): AxumPath<(String, Uuid)>,
+    Json(input): Json<RequestInput>,
+) -> Result<Json<ExtensionNodeView>, ApiErr> {
+    auth.require_csrf(&headers)?;
+    let Some(node) = db::node_by_id(&state.db, node_id).await? else {
+        return Err(ApiErr::not_found("node_not_found", "nó não encontrado"));
+    };
+    if state.extensions.manifest(&id).is_none() {
+        return Err(ApiErr::not_found(
+            "extension_not_found",
+            "extensão não encontrada",
+        ));
+    }
+    let message = input.message.trim();
+    if message.chars().count() > 500 {
+        return Err(ApiErr::bad_request(
+            "request_too_long",
+            "a mensagem da solicitação deve ter no máximo 500 caracteres",
+        ));
+    }
+    let actor = format!("admin:{}", auth.username());
+    store::set_request(
+        &state.db,
+        &id,
+        node.uuid(),
+        input.requested,
+        message,
+        &actor,
+    )
+    .await?;
+    db::audit(
+        &state.db,
+        &actor,
+        if input.requested {
+            "extension.request"
+        } else {
+            "extension.unrequest"
+        },
+        &format!("{id}/{}", node.name),
+        Some(message),
+        client_ip(&headers).as_deref(),
+    )
+    .await
+    .ok();
+    let view = state
+        .extensions
+        .detail(&state, &id)
+        .await?
+        .and_then(|detail| {
+            detail
+                .nodes
+                .into_iter()
+                .find(|view| view.node_id == node.uuid())
+        })
+        .ok_or_else(|| ApiErr::internal("nó desapareceu do detalhe da extensão"))?;
+    Ok(Json(view))
+}
+
 pub async fn put_activation(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
@@ -867,6 +948,10 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route(
             "/admin/extensions/{id}/nodes/{node_id}/activation",
             put(put_activation),
+        )
+        .route(
+            "/admin/extensions/{id}/nodes/{node_id}/request",
+            put(put_request),
         )
         .route("/node/extensions", get(node::list))
         .route("/node/extensions/{id}", put(node::set_active));

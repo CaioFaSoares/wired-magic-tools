@@ -211,7 +211,11 @@ hooks e adapters estão em [`extensions.md`](extensions.md) e
   versão do mapa.
 - `PUT /api/v1/admin/extensions/{id}/nodes/{node_id}/activation` (CSRF) —
   `{"active":true|false}` no nó.
-- `GET /api/v1/node/extensions` — catálogo para a TUI/GUI local (token do nó).
+- `PUT /api/v1/admin/extensions/{id}/nodes/{node_id}/request` (CSRF) —
+  `{"requested":true|false,"message":"..."}`; o pedido aparece no catálogo do
+  nó, mas não ativa a extensão.
+- `GET /api/v1/node/extensions` — catálogo para a TUI/GUI local (token do nó);
+  cada item inclui `requested` e `request_message` quando o servidor pediu.
 - `PUT /api/v1/node/extensions/{id}` — ativa/desativa no nó atual; `{"active":bool}`.
 - `GET|PUT|DELETE /api/v1/admin/extensions/{id}/nodes/{node_id}/config` (CSRF
   nas mutações) — config genérica de extensões declarativas.

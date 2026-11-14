@@ -1,9 +1,10 @@
 //! Public debug dashboard (`wm debug`).
 //!
-//! The `debug` extension in `extensions/public/debug` runs this as an `exec`
-//! sidecar. It samples host performance and the `wm` agent process once per
-//! second and serves a small read-only dashboard, plus `/api/snapshot` for
-//! automation.
+//! The `debug_gui` extension in `extensions/public/debug_gui` runs this as an
+//! `exec` sidecar. It samples host performance and the `wm` agent process once
+//! per second and serves a small read-only dashboard, plus `/api/snapshot` for
+//! automation. The default debug client is the local TUI `wm debug`
+//! (`extensions/public/debug`).
 //!
 //! It is deliberately local-only: the manifest binds `127.0.0.1:8791` and the
 //! adapter exposes that loopback port on the mesh. The payload includes
@@ -16,6 +17,7 @@
 //! never blocks collection.
 
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -31,6 +33,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sysinfo::{Disks, Networks, Pid, Process, ProcessStatus, System};
 
+use crate::discovery::{Discovery, DiscoverySnapshot};
+
 const INDEX_HTML: &str = include_str!("debug_assets/index.html");
 const APP_CSS: &str = include_str!("debug_assets/app.css");
 const APP_JS: &str = include_str!("debug_assets/app.js");
@@ -39,6 +43,7 @@ const MAX_TOP_PROCESSES: usize = 8;
 const MAX_DISKS: usize = 12;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const DISK_REFRESH_EVERY: u64 = 5;
+const DISCOVERY_REFRESH_EVERY: u64 = 5;
 
 // ---------------------------------------------------------------------------
 // Snapshot model
@@ -56,6 +61,7 @@ struct Snapshot {
     wm: Option<ProcessInfo>,
     wm_source: &'static str,
     processes: Vec<ProcessInfo>,
+    extensions: DiscoverySnapshot,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,17 +182,27 @@ struct Sampler {
     system: System,
     disks: Disks,
     networks: Networks,
+    discovery: Discovery,
+    extensions: DiscoverySnapshot,
     last: Instant,
     ticks: u64,
 }
 
 impl Sampler {
-    fn new() -> anyhow::Result<Self> {
+    fn new(root: &Path) -> anyhow::Result<Self> {
+        let extensions_dir = root.join("extensions");
+        let discovery = Discovery::new(
+            vec![extensions_dir.clone()],
+            Some(extensions_dir.join(".debug-discovery.json")),
+            chrono::Duration::hours(24),
+        );
         Ok(Self {
             system: System::new_all().context("sysinfo não conseguiu ler o sistema")?,
             disks: Disks::new_with_refreshed_list().context("sysinfo não conseguiu ler discos")?,
             networks: Networks::new_with_refreshed_list()
                 .context("sysinfo não conseguiu ler interfaces")?,
+            discovery,
+            extensions: DiscoverySnapshot::empty(),
             last: Instant::now(),
             ticks: 0,
         })
@@ -197,6 +213,9 @@ impl Sampler {
         self.networks.refresh(true);
         if self.ticks % DISK_REFRESH_EVERY == 0 {
             self.disks.refresh(true);
+        }
+        if self.ticks % DISCOVERY_REFRESH_EVERY == 0 {
+            self.extensions = self.discovery.scan();
         }
         self.ticks += 1;
 
@@ -220,6 +239,7 @@ impl Sampler {
                 .map(wm_process_info),
             wm_source,
             processes: top_processes(&self.system, current),
+            extensions: self.extensions.clone(),
         }
     }
 }
@@ -522,6 +542,15 @@ async fn info(State(state): State<DebugState>) -> Json<InfoResponse> {
     })
 }
 
+async fn extensions(State(state): State<DebugState>) -> Json<DiscoverySnapshot> {
+    Json(
+        state
+            .get()
+            .map(|snapshot| snapshot.extensions.clone())
+            .unwrap_or_else(DiscoverySnapshot::empty),
+    )
+}
+
 async fn snapshot(State(state): State<DebugState>) -> Response {
     match state.get() {
         Some(snapshot) => Json((*snapshot).clone()).into_response(),
@@ -550,6 +579,7 @@ fn app(state: DebugState) -> Router {
         .route("/healthz", get(health))
         .route("/api/info", get(info))
         .route("/api/snapshot", get(snapshot))
+        .route("/api/extensions", get(extensions))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(8 * 1024))
         .layer(middleware::from_fn(security_headers))
@@ -558,11 +588,12 @@ fn app(state: DebugState) -> Router {
 
 /// Starts the sampler and serves the dashboard until the process is stopped.
 pub async fn run(
+    root: PathBuf,
     listen: SocketAddr,
     title: String,
     node: Option<String>,
 ) -> anyhow::Result<()> {
-    let mut sampler = Sampler::new()?;
+    let mut sampler = Sampler::new(&root)?;
     let first = sampler.sample();
     let state = DebugState::new(title, node, first);
 
@@ -581,7 +612,7 @@ pub async fn run(
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("não foi possível escutar em {listen}"))?;
-    println!("debug: ouvindo em http://{listen}");
+    println!("debug_gui: ouvindo em http://{listen}");
     axum::serve(listener, app)
         .await
         .context("servidor de debug encerrou com erro")
@@ -641,6 +672,7 @@ mod tests {
                 wm: None,
                 wm_source: "unavailable",
                 processes: Vec::new(),
+                extensions: DiscoverySnapshot::empty(),
             }
         }
     }

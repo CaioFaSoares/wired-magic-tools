@@ -9,6 +9,7 @@
 mod actions;
 mod agent;
 mod app;
+mod catalog;
 mod command;
 mod persist;
 mod ui;
@@ -59,6 +60,8 @@ pub struct Snapshot {
     pub shares: Vec<ShareInfo>,
     pub extensions: Vec<ExtensionStatus>,
     pub extension_catalog: Vec<NodeExtensionView>,
+    pub local_catalog: Vec<catalog::Entry>,
+    pub catalog_error: Option<String>,
     pub error: Option<String>,
     pub log: Vec<String>,
     pub pid: Option<u32>,
@@ -257,7 +260,16 @@ fn maybe_auto_start(app: &mut App, tx: &Sender<Msg>, no_auto_start: bool) {
 
 fn start_fetcher(root: PathBuf, socket: PathBuf, log: PathBuf, tx: Sender<Msg>) {
     std::thread::spawn(move || {
+        let mut tick = 0u64;
+        let mut local_catalog = Vec::new();
+        let mut catalog_error = None;
         loop {
+            if tick % 5 == 0 {
+                let catalog = catalog::scan(&root);
+                local_catalog = catalog.entries;
+                catalog_error = catalog.error;
+            }
+            tick = tick.wrapping_add(1);
             let (status, error) =
                 match actions::local_call(&socket, "status", Value::Null) {
                     Ok(value) => match serde_json::from_value::<AgentStatus>(value) {
@@ -285,6 +297,8 @@ fn start_fetcher(root: PathBuf, socket: PathBuf, log: PathBuf, tx: Sender<Msg>) 
                     shares,
                     extensions,
                     extension_catalog,
+                    local_catalog: local_catalog.clone(),
+                    catalog_error: catalog_error.clone(),
                     error,
                     log: log_lines,
                     pid,

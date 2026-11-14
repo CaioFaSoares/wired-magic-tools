@@ -1,9 +1,9 @@
 #!/bin/sh
-# Hook de instalação da extensão pública `chat`.
+# Hook de instalação da extensão pública `chat_gui`.
 #
-# Não baixa nada: o servidor de chat é o subcomando `wm chat`, já presente no
-# binário que roda o agente. O hook só confirma que o binário existe e suporta
-# o subcomando antes de a ativação criar o wrapper /usr/local/bin/wm-chat.
+# Não baixa nada: a interface web é o subcomando `wm chat_gui`, já presente no
+# binário que roda o agente. O hook só confirma o binário antes de a ativação
+# criar o wrapper /usr/local/bin/wm-chat-gui.
 set -eu
 
 find_wm() {
@@ -34,29 +34,28 @@ find_wm() {
 
 wm="$(find_wm || true)"
 if [ -z "$wm" ]; then
-  echo "chat: binário 'wm' não encontrado no nó." >&2
-  echo "chat: instale o wm em /usr/local/bin/wm (ou defina WM_BIN) e ative de novo." >&2
+  echo "chat_gui: binário 'wm' não encontrado no nó." >&2
   exit 1
 fi
 
 case "$wm" in
   /*) ;;
   *)
-    echo "chat: caminho do wm não é absoluto: $wm" >&2
+    echo "chat_gui: caminho do wm não é absoluto: $wm" >&2
     exit 1
     ;;
 esac
 case "$wm" in
   *[!A-Za-z0-9._/+@-]*)
-    echo "chat: caminho do wm incomum: $wm" >&2
+    echo "chat_gui: caminho do wm incomum: $wm" >&2
     exit 1
     ;;
 esac
 
-if ! "$wm" chat --help >/dev/null 2>&1; then
-  echo "chat: '$wm' não expõe o subcomando 'chat'; atualize o wired-magic." >&2
+if ! "$wm" chat_gui --help >/dev/null 2>&1; then
+  echo "chat_gui: '$wm' não expõe o subcomando 'chat_gui'; atualize o wired-magic." >&2
   exit 1
 fi
 
 install -d /usr/local/bin
-echo "chat: wm encontrado em $wm"
+echo "chat_gui: wm encontrado em $wm"

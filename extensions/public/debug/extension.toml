@@ -1,51 +1,19 @@
-# Extensão pública: debug.
+# Extensão pública: debug (TUI).
 #
-# Sobe um painel de performance do host e do processo `wm` em loopback
-# (127.0.0.1:8791). O adapter publica o share `debug-<nó>` e expõe a porta no
-# overlay; não há exposição pública nem autenticação. Mantenha na malha.
+# O debug padrão é a TUI embutida no binário `wm`:
 #
-# O sidecar é o próprio binário `wm`: o hook de ativação grava um wrapper em
-# /usr/local/bin/wm-debug que executa `wm debug`.
+#   wm debug              # dashboard local de performance
+#   wm debug discover     # descobre extensões locais (debug-discover)
+#
+# O painel web equivalente é a extensão `debug_gui`. Esta extensão não tem
+# sidecar: o manifesto documenta o pacote TUI no catálogo.
 id = "debug"
-name = "Debug público"
+name = "Debug (TUI)"
 version = "0.1.0"
-description = "Painel de performance do host e do processo wm: CPU, memória, discos, rede e top processos."
+description = "Dashboard de performance no terminal: CPU, memória, load, processo wm, top processos e descoberta de extensões locais."
 author = "wired-magic"
 homepage = "https://github.com/CaioFaSoares/wired-magic-tools/tree/main/extensions/public/debug"
 visibility = "public"
-node_driver = "exec"
+node_driver = "none"
 ui = "generic"
 default_active = false
-
-[default_config]
-command = "/usr/local/bin/wm-debug"
-args = ["--listen", "127.0.0.1:8791"]
-restart = "always"
-
-[config_example]
-command = "/usr/local/bin/wm-debug"
-args = ["--listen", "127.0.0.1:8791", "--title", "Debug público"]
-restart = "always"
-
-[hooks.install]
-command = "{extension_dir}/install.sh"
-timeout_secs = 60
-
-[hooks.activate]
-command = "{extension_dir}/activate.sh"
-timeout_secs = 30
-
-[hooks.deactivate]
-command = "{extension_dir}/deactivate.sh"
-timeout_secs = 10
-
-[adapter]
-labels = { debug = "true", debug_port = "8791" }
-exposes = [{ overlay_port = 8791, local_port = 8791 }]
-
-[[adapter.shares]]
-name = "debug-{node}"
-port = 8791
-kind = "web"
-protocol = "tcp"
-description = "Painel de performance do nó"

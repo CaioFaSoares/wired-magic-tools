@@ -40,16 +40,16 @@ flowchart LR
 
 O tap público é [CaioFaSoares/homebrew-tap](https://github.com/CaioFaSoares/homebrew-tap)
 e a instalação é `brew tap CaioFaSoares/tap && brew install CaioFaSoares/tap/wired-magic`
-(detalhes em [Homebrew](docs/homebrew.md)). A release `v0.1.1` já está publicada e a
+(detalhes em [Homebrew](docs/homebrew.md)). A release `v0.1.2` já está publicada e a
 fórmula está no tap; novas versões entram no tap pelo mesmo script. Os binários de
 demonstração em `dist/` não são releases do tap. A publicação local não gasta minutos
 do GitHub Actions; o workflow macOS é apenas um fallback manual.
 
 ```sh
 git status                      # a árvore precisa estar limpa
-scripts/publish_macos.sh --tag v0.1.1 --dry-run
+scripts/publish_macos.sh --tag v0.1.2 --dry-run
 # commit + git push, e então:
-scripts/publish_macos.sh --tag v0.1.1
+scripts/publish_macos.sh --tag v0.1.2
 ```
 
 Ao abrir `wm tui` instalado pelo tap, a TUI verifica e instala versões estáveis mais
@@ -916,20 +916,27 @@ A pasta [`extensions/`](extensions/) é a fonte de verdade dos bundlados, dividi
 **públicas** (`extensions/public/`) e **privadas** (`extensions/private/`):
 
 - **Cloudflare Tunnel** (pública; `quick` com URL efêmera ou `named` com hostname próprio);
-- **Chat público** (pública): o sidecar `wm chat` serve uma sala web em `127.0.0.1:8790`, o
-  adapter publica o share `chat-<nó>` e expõe a porta só no overlay. O acesso é sempre pelo
-  túnel da malha — um nó com portas públicas fechadas continua alcançando o chat do nó
-  servidor. Sem autenticação por padrão; mantenha fora da internet;
-- **Debug público** (pública): o sidecar `wm debug` serve um painel de performance do host e
-  do processo `wm` em `127.0.0.1:8791`, com share `debug-<nó>` e porta exposta só no overlay;
+- **Chat** (público): o padrão é a TUI `wm chat`; o sidecar `wm chat_gui` serve a versão web
+  em `127.0.0.1:8790`. O adapter publica `chat-gui-<nó>` e expõe a porta só no overlay — um nó
+  com portas públicas fechadas continua alcançando o chat do nó servidor pelo túnel da malha.
+  Sem autenticação por padrão;
+- **Debug** (público): o padrão é a TUI `wm debug`; o sidecar `wm debug_gui` serve o painel web
+  em `127.0.0.1:8791`, com share `debug-gui-<nó>` e `debug-discover`;
 - **Seance** (privada), a receita de integração interna: `install.sh` instala o
   `seance-agent`, `activate.sh` prepara, o adapter publica o share `baguette-<nó>`, expõe
-  `8421` no overlay e aplica as labels `seance`/`baguette_port`.
+  `8421` no overlay e aplica as labels `seance`/`baguette_port`;
+- **Debug Publish** (privada): ferramenta de operador que publica a release no GitHub, fora
+  do runtime de nós.
 
 Manifestos ficam em `<data-dir>/extensions/<id>/extension.toml`; extensões declarativas usam
-`node_driver = "exec"` e um JSON validado por nó. Hooks de ciclo de vida e adapters estão em
-[hooks-adapters](docs/hooks-adapters.md); o guia geral é [extensions](docs/extensions.md). O
-alvo do cloudflared precisa ser loopback do próprio nó; credenciais nunca voltam pela API.
+`node_driver = "exec"` e um JSON validado por nó. O servidor pode **solicitar** uma extensão
+para um nó; o pedido aparece no catálogo com `!`, mas o membro decide ativar. A aba
+**Extensões** da TUI mostra o catálogo do control e um **catálogo local** de
+`<data_dir>/extensions`, visível mesmo com o agente parado. Pacotes também podem ser instalados
+de repositórios git no formato flake (`wm packages`). Hooks e adapters
+estão em [hooks-adapters](docs/hooks-adapters.md); o guia geral é
+[extensions](docs/extensions.md). O alvo do cloudflared precisa ser loopback do próprio nó;
+credenciais nunca voltam pela API.
 
 ### Diagnóstico
 
@@ -960,8 +967,12 @@ No Linux, logs do serviço: `journalctl -u wired-magic-agent -n 200 --no-pager`.
 | `wm shares [--json]` | lista os shares da malha |
 | `wm extensions [--json]` | catálogo de extensões deste nó (TUI/GUI local) |
 | `wm extensions enable <id>` / `disable <id>` | ativa/desativa no nó atual |
-| `wm chat [--listen]` | serve a sala pública da extensão `chat` (loopback) |
-| `wm debug [--listen]` | serve o painel de performance da extensão `debug` (loopback) |
+| `wm chat --url <url>` | TUI de chat conectada a um `chat_gui` (padrão) |
+| `wm chat_gui [--listen]` | serve a interface web do chat (extensão `chat_gui`) |
+| `wm debug` | dashboard TUI local de performance (padrão) |
+| `wm debug discover` | descobre extensões locais (`debug-discover`) |
+| `wm debug_gui [--listen]` | serve o painel web de performance (extensão `debug_gui`) |
+| `wm packages <subcomando>` | gerencia extensões de repositórios git (discover/install/update/remove) |
 | `wm open <nome> [--print]` | abre um share web ou imprime o endereço |
 | `wm share-rename <nome> <novo>` | renomeia um share seu |
 | `wm share-enable <nome> [--off]` | liga/desliga um share seu |

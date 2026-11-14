@@ -266,6 +266,12 @@ pub struct NodeExtensionView {
     pub activation_revision: u64,
     #[serde(default)]
     pub default_config: bool,
+    /// O servidor pediu que este nó rode a extensão. É uma recomendação; a
+    /// ativação continua sendo uma decisão do membro.
+    #[serde(default)]
+    pub requested: bool,
+    #[serde(default)]
+    pub request_message: Option<String>,
     #[serde(default)]
     pub status: Option<ExtensionStatus>,
 }

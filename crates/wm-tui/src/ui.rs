@@ -1088,9 +1088,14 @@ fn draw_agent(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
+    let local_height = if area.height >= 30 { 8 } else { 5 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(4)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(4),
+            Constraint::Length(local_height),
+        ])
         .split(area);
 
     let live = if app.live {
@@ -1098,11 +1103,11 @@ fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
             Span::styled("● ", Style::default().fg(Color::Green)),
             Span::raw("catálogo do control via agente · "),
             Span::styled("Enter/t ativa ou desativa no nó", Style::default().fg(Color::Cyan)),
-            Span::raw(" · p abre o painel · g GUI local"),
+            Span::raw(" · catálogo local abaixo · p painel · g GUI local"),
         ])
     } else {
         Line::from(Span::styled(
-            "sem agente: ative o agente para ler o catálogo e alternar extensões",
+            "sem agente: catálogo local abaixo; ative o agente para o catálogo do control",
             Style::default().fg(Color::Yellow),
         ))
     };
@@ -1156,7 +1161,19 @@ fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
                 }
                 message.push_str("Enter ativa com config padrão");
             }
-            let label = if view.builtin {
+            if view.requested {
+                if !message.is_empty() {
+                    message.push_str(" · ");
+                }
+                message.push_str("solicitada pelo servidor");
+                if let Some(note) = view.request_message.as_deref().filter(|note| !note.is_empty()) {
+                    message.push_str(": ");
+                    message.push_str(note);
+                }
+            }
+            let label = if view.requested {
+                format!("! {}", view.name)
+            } else if view.builtin {
                 format!("{} ✦", view.name)
             } else {
                 view.name.clone()
@@ -1204,9 +1221,82 @@ fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
             frame,
             chunks[1],
             if app.live {
-                "nenhuma extensão no catálogo; verifique <data_dir>/extensions"
+                "nenhuma extensão no catálogo do control; veja o catálogo local abaixo"
             } else {
-                "agente parado"
+                "agente parado; veja o catálogo local abaixo"
+            },
+        );
+    }
+
+    draw_local_catalog(frame, chunks[2], app);
+}
+
+fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &App) {
+    let header = Row::new(vec!["Extensão", "Versão", "Visib", "Driver", "Status", "Caminho"])
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    let rows: Vec<Row> = app
+        .local_catalog
+        .iter()
+        .map(|entry| {
+            let status_color = match entry.status.as_str() {
+                "nova" => Color::Green,
+                "atualizada" => Color::Yellow,
+                "ok" | "conhecida" => Color::DarkGray,
+                _ => Color::Gray,
+            };
+            let label = if entry.name == entry.id {
+                entry.id.clone()
+            } else {
+                format!("{} ({})", entry.name, entry.id)
+            };
+            Row::new(vec![
+                Cell::from(truncate(&label, 30)),
+                Cell::from(entry.version.clone()),
+                Cell::from(entry.visibility.clone()),
+                Cell::from(entry.driver.clone()),
+                Cell::from(Span::styled(
+                    entry.status.clone(),
+                    Style::default().fg(status_color),
+                )),
+                Cell::from(truncate(&entry.path, 42)),
+            ])
+        })
+        .collect();
+
+    let title = match &app.catalog_error {
+        Some(err) => format!(" Catálogo local (aviso: {}) ", truncate(err, 60)),
+        None => format!(
+            " Catálogo local ({} em <data_dir>/extensions) ",
+            app.local_catalog.len()
+        ),
+    };
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(30),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(10),
+            Constraint::Length(10),
+            Constraint::Min(18),
+        ],
+    )
+    .header(header)
+    .block(block(title));
+    frame.render_widget(table, area);
+
+    if app.local_catalog.is_empty() {
+        empty_message(
+            frame,
+            area,
+            if app.catalog_error.is_some() {
+                "não foi possível ler o catálogo local"
+            } else {
+                "nenhuma extensão em <data_dir>/extensions"
             },
         );
     }
@@ -1636,7 +1726,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         TAB_SHARES => " n publicar · Enter abrir · c copiar · r renomear · e on/off · d remover",
         TAB_TOPOLOGY => " Tab abas · ? ajuda · q sair (agente continua)",
         TAB_AGENT => " s iniciar · X parar · R reiniciar · e ajustes · l log · i serviço",
-        TAB_EXTENSIONS => " Enter/t ativar · p painel · g GUI · j/k navegar · ? ajuda",
+        TAB_EXTENSIONS => " Enter/t ativar · catálogo local abaixo · p painel · g GUI · j/k · ? ajuda",
         TAB_SERVICES => " Enter log · g/G GUI · p painel · x para job · i/u serviço · t status",
         TAB_CONSOLE => " : comando · j/k rolar · PgUp/PgDn · Home/End · c limpar",
         TAB_HELP => " j/k rolar · :comando · q sair (agente continua)",
@@ -2315,6 +2405,8 @@ mod tests {
             configured: false,
             activation_revision: 0,
             default_config: true,
+            requested: false,
+            request_message: None,
             status: None,
         }];
         app.extensions_table.select(Some(0));

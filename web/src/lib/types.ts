@@ -315,6 +315,8 @@ export interface ExtensionNodeView {
   activation_revision: number;
   revision: number;
   config: unknown;
+  requested: boolean;
+  request_message?: string | null;
   status?: ExtensionStatus | null;
   updated_at?: IsoDate | null;
 }

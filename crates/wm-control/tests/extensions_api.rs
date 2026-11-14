@@ -561,7 +561,9 @@ async fn seeded_catalog_exposes_public_and_private_visibility() {
     for (id, visibility) in [
         ("cloudflared", "public"),
         ("chat", "public"),
+        ("chat_gui", "public"),
         ("debug", "public"),
+        ("debug_gui", "public"),
         ("seance", "private"),
     ] {
         let entry = entries
@@ -570,4 +572,77 @@ async fn seeded_catalog_exposes_public_and_private_visibility() {
             .unwrap_or_else(|| panic!("extensão {id} ausente do catálogo"));
         assert_eq!(entry["visibility"], visibility, "{id}: {entry}");
     }
+}
+
+#[tokio::test]
+async fn admin_can_request_an_extension_for_a_node() {
+    let (_dir, state) = boot().await;
+    let app = wm_control::api::router(state.clone());
+    let admin = login(&app).await;
+    let token = auth::random_token("wmn_").unwrap();
+    let node = db::create_node(
+        &state.db,
+        "mac-request-chat",
+        "mac-request-chat.local",
+        "linux",
+        "x86_64",
+        "0.1.0",
+        &STANDARD.encode([21u8; 32]),
+        &[],
+        &Default::default(),
+        NodeStatus::Active,
+        "test",
+        &auth::hash_token(&token),
+        state.overlay,
+    )
+    .await
+    .unwrap();
+
+    let path = format!(
+        "/api/v1/admin/extensions/chat_gui/nodes/{}/request",
+        node.uuid()
+    );
+    let (status, view) = request(
+        &app,
+        "PUT",
+        &path,
+        Some(&admin),
+        None,
+        Some(json!({"requested": true, "message": "rode o chat_gui neste nó"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["requested"], true);
+    assert_eq!(view["request_message"], "rode o chat_gui neste nó");
+
+    let (status, catalog) = request(
+        &app,
+        "GET",
+        "/api/v1/node/extensions",
+        None,
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    let chat = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "chat_gui")
+        .expect("chat_gui no catálogo do nó");
+    assert_eq!(chat["requested"], true);
+    assert_eq!(chat["request_message"], "rode o chat_gui neste nó");
+
+    let (status, view) = request(
+        &app,
+        "PUT",
+        &path,
+        Some(&admin),
+        None,
+        Some(json!({"requested": false, "message": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["requested"], false);
 }
