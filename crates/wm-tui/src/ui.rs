@@ -1957,6 +1957,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         TAB_SERVICES => " Enter log · g/G GUI · p painel · x para job · i/u serviço · t status",
         TAB_CONSOLE => " : comando · j/k rolar · PgUp/PgDn · Home/End · c limpar",
         TAB_HELP => " j/k rolar · :comando · q sair (agente continua)",
+        _ if app
+            .selected_extension_tab()
+            .is_some_and(|tab| tab.spec.mode == wm_proto::TuiMode::Pane) =>
+        {
+            " Tab/Shift+Tab abas · teclas vão para a extensão · Ctrl+C fecha o wm"
+        }
         _ if app.selected_extension_tab().is_some() => {
             " Enter abre a interface da extensão · Tab abas · q sair"
         }

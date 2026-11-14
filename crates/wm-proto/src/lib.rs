@@ -215,8 +215,8 @@ pub struct TuiSpec {
     pub args: Vec<String>,
     #[serde(default = "default_tui_refresh")]
     pub refresh_secs: u64,
-    /// Options expanded as `{option:key}` in `command`/`args` (and `cwd` for
-    /// panes).
+    /// Options expanded as `{option:key}` in `command`/`args` (and `cwd`
+    /// for panes).
     #[serde(default)]
     pub options: std::collections::BTreeMap<String, String>,
 }

@@ -223,7 +223,7 @@ brew tap CaioFaSoares/tap
 brew install CaioFaSoares/tap/wired-magic
 ```
 
-A release atual é `v0.1.3`. A TUI instalada pelo Homebrew verifica e instala versões estáveis mais
+A release atual é `v0.1.6`. A TUI instalada pelo Homebrew verifica e instala versões estáveis mais
 novas em segundo plano; a sessão e o agente continuam na versão atual e a nova entra na próxima
 abertura. `WM_NO_AUTO_UPDATE=1` desativa. Fórmulas fixadas com `brew pin` são respeitadas; sob
 `sudo`, a TUI apenas orienta a atualizar como usuário normal (nunca executa Homebrew como root).

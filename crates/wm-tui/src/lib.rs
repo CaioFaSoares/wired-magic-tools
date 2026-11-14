@@ -328,6 +328,7 @@ fn event_loop(
     Ok(())
 }
 
+
 fn is_pane(app: &App) -> bool {
     app.selected_extension_tab()
         .is_some_and(|tab| tab.spec.mode == TuiMode::Pane)

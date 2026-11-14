@@ -146,3 +146,15 @@ Permanecem para aceite completo do plano:
 3. Instalação/reboot/upgrade/rollback em Linux/macOS limpos; locks cobrem caminhos CLI, não promessa universal de exclusão de agentes iniciados fora deles.
 4. Definir política inicial de produção restrita: alpha ainda preserva política intencionalmente vazia allow-all. Proxy/limites de conexão, revisão independente, fmt/clippy e auditoria de dependências pendentes (`rustfmt` indisponível localmente).
 5. Confirmar VPS/Macs/jogos/portas/plataformas e realizar campo/NAT/performance. Integração Seance exige outro repositório; API disponível não é integração implementada. Nenhum gate G0–G5 está implicitamente aprovado.
+
+## Rodada 7 — release v0.1.6
+
+- Consolidação das duas linhas paralelas: a árvore local (identidade e perfis, exigências por nó,
+  bridge desktop macOS) e a linha publicada v0.1.4/v0.1.5 (TUIs de extensão em panes PTY).
+- Merge de `origin/main` (v0.1.5) resolvido em `README.md` (mantida a versão nova), `wm-proto`
+  (comentário) e `wm-tui/src/lib.rs` (linha em branco).
+- Versão `0.1.6` em `Cargo.toml`, `web/package.json` e manifests flake; docs de Homebrew e
+  referência técnica atualizados.
+- Verificação: `CARGO_HOME="$PWD/.cargo-home" cargo test --workspace --offline` — **214 aprovados,
+  2 ignorados**; `pnpm --dir web typecheck` e `pnpm --dir web build` exit 0.
+- Publicação: assets macOS `arm64` e `x86_64`, `SHA256SUMS`, `wired-magic.rb` e fórmula no tap.

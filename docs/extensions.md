@@ -251,7 +251,7 @@ options = { url = "http://127.0.0.1:8790" }
   `WM_TUI_PANE=1` no modo pane).
 - Até 8 abas de extensão são exibidas; o catálogo local inclui os manifestos
   embutidos mesmo antes do data dir ser semeado.
-.
+
 Contrato JSON do `mode = "snapshot"` (definido em `wm-proto::TuiDocument`):
 
 ```json
