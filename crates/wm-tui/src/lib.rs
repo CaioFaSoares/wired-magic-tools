@@ -10,6 +10,7 @@ mod actions;
 mod agent;
 mod app;
 mod catalog;
+mod pane;
 mod command;
 mod persist;
 mod ui;
@@ -75,6 +76,8 @@ pub enum Msg {
     Console(Level, String),
     Agent(AgentEvent),
     Job(JobEvent),
+    PaneData { id: String, bytes: Vec<u8> },
+    PaneClosed { id: String },
     Joined(Option<EnrolledNode>),
     CommandFinished {
         pid: u32,
@@ -220,6 +223,9 @@ fn event_loop(
         if let Some(id) = app.pending_tui_exec.take() {
             run_extension_exec(terminal, screen, app, &id);
         }
+        if let Ok(size) = terminal.size() {
+            ensure_pane(app, &tx, size.height.saturating_sub(7), size.width);
+        }
         terminal.draw(|frame| ui::draw(frame, app))?;
         if event::poll(Duration::from_millis(200))? {
             match event::read()? {
@@ -239,6 +245,191 @@ fn event_loop(
         }
     }
     Ok(())
+}
+
+
+fn is_pane(app: &App) -> bool {
+    app.selected_extension_tab()
+        .is_some_and(|tab| tab.spec.mode == TuiMode::Pane)
+}
+
+fn selected_pane_id(app: &App) -> Option<String> {
+    app.selected_extension_tab()
+        .filter(|tab| tab.spec.mode == TuiMode::Pane)
+        .map(|tab| tab.id.clone())
+}
+
+fn ensure_pane(app: &mut App, tx: &Sender<Msg>, rows: u16, cols: u16) {
+    let Some(id) = selected_pane_id(app) else {
+        return;
+    };
+    if let Some(pane) = app.panes.get_mut(&id) {
+        pane.poll();
+        return;
+    }
+    if app.pane_errors.contains_key(&id) {
+        return;
+    }
+    let Some(tab) = app.extension_tabs.iter().find(|tab| tab.id == id).cloned() else {
+        return;
+    };
+    let (command, args, cwd) = resolve_tui_command(app, &tab);
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("WM_EXTENSION_ID".into(), id.clone());
+    env.insert("WM_DATA_DIR".into(), app.root.display().to_string());
+    env.insert("WM_TUI".into(), "1".into());
+    env.insert("WM_TUI_PANE".into(), "1".into());
+    match crate::pane::Pane::start(
+        id.clone(),
+        &command,
+        &args,
+        cwd.as_deref(),
+        &env,
+        rows,
+        cols,
+        tx.clone(),
+    ) {
+        Ok(pane) => {
+            app.panes.insert(id.clone(), pane);
+            app.pane_errors.remove(&id);
+        }
+        Err(err) => {
+            app.pane_errors.insert(id, err);
+        }
+    }
+}
+
+fn resolve_tui_command(
+    app: &App,
+    tab: &crate::app::ExtensionTab,
+) -> (String, Vec<String>, Option<std::path::PathBuf>) {
+    let extension_dir = app
+        .local_catalog
+        .iter()
+        .find(|entry| entry.id == tab.id)
+        .map(|entry| entry.path.as_str())
+        .filter(|path| *path != "<embutida>")
+        .map(|path| app.root.join("extensions").join(path));
+    let expand = |value: &str| {
+        let mut value = value
+            .replace("{wm}", &app.exe.display().to_string())
+            .replace(
+                "{extension_dir}",
+                &extension_dir
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+            );
+        for (key, option) in &tab.spec.options {
+            value = value.replace(&format!("{{option:{key}}}"), option);
+        }
+        value
+    };
+    let command = expand(&tab.spec.command);
+    let args = tab.spec.args.iter().map(|arg| expand(arg)).collect();
+    let cwd = tab
+        .spec
+        .options
+        .get("cwd")
+        .map(|cwd| {
+            let path = std::path::PathBuf::from(expand(cwd));
+            if path.is_absolute() {
+                path
+            } else if let Some(dir) = &extension_dir {
+                dir.join(path)
+            } else {
+                app.root.join(path)
+            }
+        })
+        .or_else(|| extension_dir.clone());
+    (command, args, cwd)
+}
+
+fn handle_pane_key(app: &mut App, key: KeyEvent) -> bool {
+    if !is_pane(app) {
+        return false;
+    }
+    if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+        return false;
+    }
+    let Some(id) = selected_pane_id(app) else {
+        return false;
+    };
+    if app.panes.get(&id).is_none() {
+        if key.code == KeyCode::Enter {
+            app.pane_errors.remove(&id);
+        }
+        return true;
+    }
+    let exited = app.panes.get(&id).is_some_and(|pane| pane.exited);
+    if exited {
+        if key.code == KeyCode::Enter {
+            app.panes.remove(&id);
+            app.pane_errors.remove(&id);
+        }
+        return true;
+    }
+    if let Some(bytes) = key_bytes(key)
+        && let Some(pane) = app.panes.get_mut(&id)
+    {
+        pane.write(&bytes);
+    }
+    true
+}
+
+fn key_bytes(key: KeyEvent) -> Option<Vec<u8>> {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let mut bytes = Vec::new();
+    if alt {
+        bytes.push(0x1b);
+    }
+    match key.code {
+        KeyCode::Char(ch) if control => {
+            let ch = ch.to_ascii_lowercase();
+            if ch.is_ascii() {
+                bytes.push((ch as u8) & 0x1f);
+            }
+        }
+        KeyCode::Char(ch) => {
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+        KeyCode::Enter => bytes.push(b'\r'),
+        KeyCode::Backspace => bytes.push(0x7f),
+        KeyCode::Esc => bytes.push(0x1b),
+        KeyCode::Up => bytes.extend_from_slice(b"\x1b[A"),
+        KeyCode::Down => bytes.extend_from_slice(b"\x1b[B"),
+        KeyCode::Right => bytes.extend_from_slice(b"\x1b[C"),
+        KeyCode::Left => bytes.extend_from_slice(b"\x1b[D"),
+        KeyCode::Home => bytes.extend_from_slice(b"\x1b[H"),
+        KeyCode::End => bytes.extend_from_slice(b"\x1b[F"),
+        KeyCode::Delete => bytes.extend_from_slice(b"\x1b[3~"),
+        KeyCode::Insert => bytes.extend_from_slice(b"\x1b[2~"),
+        KeyCode::PageUp => bytes.extend_from_slice(b"\x1b[5~"),
+        KeyCode::PageDown => bytes.extend_from_slice(b"\x1b[6~"),
+        KeyCode::F(number) => {
+            let suffix = match number {
+                1 => "P",
+                2 => "Q",
+                3 => "R",
+                4 => "S",
+                5 => "15~",
+                6 => "17~",
+                7 => "18~",
+                8 => "19~",
+                9 => "20~",
+                10 => "21~",
+                11 => "23~",
+                12 => "24~",
+                _ => return None,
+            };
+            bytes.extend_from_slice(b"\x1b");
+            bytes.extend_from_slice(suffix.as_bytes());
+        }
+        _ => return None,
+    }
+    Some(bytes)
 }
 
 fn run_extension_exec(
@@ -440,6 +631,19 @@ fn handle_msg(app: &mut App, msg: Msg, tx: &Sender<Msg>) {
         Msg::Console(level, text) => app.push_console(level, text),
         Msg::Agent(event) => handle_agent_event(app, event, tx),
         Msg::Job(event) => handle_job_event(app, event),
+        Msg::PaneData { id, bytes } => {
+            if let Some(pane) = app.panes.get_mut(&id) {
+                pane.feed(&bytes);
+            }
+        }
+        Msg::PaneClosed { id } => {
+            if let Some(pane) = app.panes.get_mut(&id) {
+                pane.exited = true;
+                if pane.exit.is_none() {
+                    pane.exit = Some("encerrado".into());
+                }
+            }
+        }
         Msg::Joined(node) => {
             let name = node
                 .as_ref()
@@ -826,6 +1030,9 @@ fn mouse_scroll(app: &mut App, up: bool, column: u16, row: u16) {
         menu_move(app, if up { -1 } else { 1 });
         return;
     }
+    if is_pane(app) {
+        return;
+    }
     if crate::app::rect_contains(app.tabs_rect, column, row) {
         app.tab = if up {
             (app.tab + app.tab_count() - 1) % app.tab_count()
@@ -1049,6 +1256,9 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
     }
     if app.input.is_some() {
         handle_input_key(app, key, tx);
+        return;
+    }
+    if handle_pane_key(app, key) {
         return;
     }
     match key.code {

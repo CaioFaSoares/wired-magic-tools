@@ -463,6 +463,9 @@ pub struct App {
     pub extension_tabs: Vec<ExtensionTab>,
     /// Comando exec pedido por uma aba; o event loop suspende a TUI e executa.
     pub pending_tui_exec: Option<String>,
+    /// PTYs embutidos das abas `mode = "pane"`.
+    pub panes: std::collections::HashMap<String, crate::pane::Pane>,
+    pub pane_errors: std::collections::HashMap<String, String>,
     pub node: Option<EnrolledNode>,
     /// Why `agent-state.json` could not be read (permissions/parse), if so.
     pub node_error: Option<String>,
@@ -712,6 +715,8 @@ impl App {
             catalog_error: None,
             extension_tabs: Vec::new(),
             pending_tui_exec: None,
+            panes: std::collections::HashMap::new(),
+            pane_errors: std::collections::HashMap::new(),
             node: None,
             node_error: None,
             live: false,

@@ -228,20 +228,27 @@ ganha uma seção `[tui]`:
 ```toml
 [tui]
 tab = "Chat"
-mode = "exec"          # exec | snapshot
+mode = "pane"          # pane | snapshot | exec
 command = "{wm}"
-args = ["chat"]
+args = ["chat", "--url", "{option:url}"]
 refresh_secs = 5       # usado no modo snapshot
+options = { url = "http://127.0.0.1:8790" }
 ```
 
-- `mode = "exec"`: a TUI principal é suspensa e o comando roda em tela cheia
-  (ex.: `wm chat`, `wm debug`); ao sair, a TUI é restaurada na mesma aba.
+- `mode = "pane"`: a extensão roda dentro de um **PTY embutido** no corpo da
+  TUI principal. O wm fornece o terminal, o redimensionamento e encaminha as
+  teclas; a extensão desenha a interface que quiser (ratatui, curses, shell).
+  `Tab`/`Shift+Tab` troca de aba; as demais teclas vão para a extensão. Se o
+  processo sair, `Enter` reinicia a aba.
+- `mode = "exec"`: a TUI principal é suspensa e o comando roda em tela cheia;
+  ao sair, a TUI é restaurada na mesma aba.
 - `mode = "snapshot"`: a TUI executa o comando periodicamente e renderiza o
   JSON de `TuiDocument` abaixo. O comando deve terminar rápido e imprimir
   somente o JSON em stdout.
 - `{wm}` é substituído pelo binário atual; `{extension_dir}` pelo diretório
-  local da extensão, quando conhecido.
-- Variáveis no comando snapshot: `WM_EXTENSION_ID`, `WM_DATA_DIR`, `WM_TUI=1`.
+  local da extensão; `{option:chave}` por uma opção de `[tui.options]`.
+- Variáveis no comando: `WM_EXTENSION_ID`, `WM_DATA_DIR`, `WM_TUI=1` (e
+  `WM_TUI_PANE=1` no modo pane).
 - Até 8 abas de extensão são exibidas; o catálogo local inclui os manifestos
   embutidos mesmo antes do data dir ser semeado.
 

@@ -190,6 +190,10 @@ pub struct TuiSpec {
     pub args: Vec<String>,
     #[serde(default = "default_tui_refresh")]
     pub refresh_secs: u64,
+    /// Options expanded as `{option:key}` in `command`/`args` (and `cwd`
+    /// for panes).
+    #[serde(default)]
+    pub options: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +204,9 @@ pub enum TuiMode {
     Snapshot,
     /// The TUI suspends itself and runs the command full-screen.
     Exec,
+    /// The TUI runs the command inside an embedded pseudo-terminal. The
+    /// extension implements its own interface and receives keyboard input.
+    Pane,
 }
 
 fn default_tui_refresh() -> u64 {

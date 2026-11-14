@@ -21,7 +21,7 @@ default_active = false
 # Aba própria na TUI principal: executa o dashboard local `wm debug`.
 [tui]
 tab = "Debug"
-mode = "exec"
+mode = "pane"
 command = "{wm}"
 args = ["debug"]
-refresh_secs = 2
+refresh_secs = 1

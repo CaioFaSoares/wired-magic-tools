@@ -22,7 +22,10 @@ default_active = false
 # interface e executa `wm chat` no terminal; ao sair, volta para a TUI.
 [tui]
 tab = "Chat"
-mode = "exec"
+# TUI embutida via PTY: a extensão implementa a própria interface (aqui,
+# `wm chat`) e o wm só fornece o terminal, o redimensionamento e as teclas.
+mode = "pane"
 command = "{wm}"
-args = ["chat"]
-refresh_secs = 2
+args = ["chat", "--url", "{option:url}"]
+refresh_secs = 1
+options = { url = "http://127.0.0.1:8790" }

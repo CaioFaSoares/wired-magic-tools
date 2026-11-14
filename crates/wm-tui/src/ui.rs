@@ -1751,6 +1751,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         TAB_SERVICES => " Enter log · g/G GUI · p painel · x para job · i/u serviço · t status",
         TAB_CONSOLE => " : comando · j/k rolar · PgUp/PgDn · Home/End · c limpar",
         TAB_HELP => " j/k rolar · :comando · q sair (agente continua)",
+        _ if app
+            .selected_extension_tab()
+            .is_some_and(|tab| tab.spec.mode == wm_proto::TuiMode::Pane) =>
+        {
+            " Tab/Shift+Tab abas · teclas vão para a extensão · Ctrl+C fecha o wm"
+        }
         _ if app.selected_extension_tab().is_some() => {
             " Enter abre a interface da extensão · Tab abas · q sair"
         }
@@ -1765,7 +1771,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 }
 
-fn draw_extension_tab(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_extension_tab(frame: &mut Frame, area: Rect, app: &mut App) {
+    if app
+        .selected_extension_tab()
+        .is_some_and(|tab| tab.spec.mode == wm_proto::TuiMode::Pane)
+    {
+        draw_pane(frame, area, app);
+        return;
+    }
     let Some(tab) = app.selected_extension_tab() else {
         return;
     };
@@ -1865,6 +1878,67 @@ fn draw_extension_tab(frame: &mut Frame, area: Rect, app: &App) {
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn draw_pane(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(tab) = app.selected_extension_tab() else {
+        return;
+    };
+    let id = tab.id.clone();
+    let title = tab.title.clone();
+    if let Some(error) = app.pane_errors.get(&id) {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    format!("não foi possível abrir a TUI de {title}"),
+                    Style::default().fg(Color::Red),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(error.clone(), Style::default().fg(Color::Gray))),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter tenta de novo · Tab muda de aba",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ])
+            .block(block(format!(" {title} ")))
+            .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+    let Some(pane) = app.panes.get_mut(&id) else {
+        frame.render_widget(
+            Paragraph::new("iniciando a TUI da extensão…")
+                .block(block(format!(" {title} "))),
+            area,
+        );
+        return;
+    };
+    pane.resize(area.height, area.width);
+    pane.poll();
+    pane.render(frame, area);
+    if pane.exited {
+        let message = format!(
+            " {} encerrado ({}) · Enter reinicia · Tab muda de aba ",
+            title,
+            pane.exit.as_deref().unwrap_or("fim")
+        );
+        let status = Rect {
+            x: area.x,
+            y: area.bottom().saturating_sub(1),
+            width: area.width,
+            height: 1,
+        };
+        frame.render_widget(Clear, status);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(&message, area.width as usize),
+                Style::default().bg(Color::Red).fg(Color::White),
+            ))),
+            status,
+        );
+    }
 }
 
 fn draw_form(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -2632,6 +2706,7 @@ mod tests {
                     command: "{wm}".into(),
                     args: vec!["chat".into()],
                     refresh_secs: 2,
+                    options: Default::default(),
                 }),
                 ..base_extension_view("chat")
             },
@@ -2644,6 +2719,7 @@ mod tests {
                     command: "/bin/true".into(),
                     args: Vec::new(),
                     refresh_secs: 2,
+                    options: Default::default(),
                 }),
                 ..base_extension_view("panel")
             },

@@ -933,8 +933,8 @@ Manifestos ficam em `<data-dir>/extensions/<id>/extension.toml`; extensões decl
 para um nó; o pedido aparece no catálogo com `!`, mas o membro decide ativar. A aba
 **Extensões** da TUI mostra o catálogo do control e um **catálogo local** de
 `<data_dir>/extensions` (mais os manifestos embutidos), visível mesmo com o agente parado.
-Extensões podem declarar uma aba própria com `[tui]` (`snapshot` ou `exec`); `chat` e `debug`
-já fazem isso. Pacotes também podem ser instalados de repositórios git no formato flake
+Extensões podem declarar uma aba própria com `[tui]` (`pane` — TUI embutida via PTY —,
+`snapshot` ou `exec`); `chat` e `debug` já fazem isso. Pacotes também podem ser instalados de repositórios git no formato flake
 (`wm packages`). Hooks e adapters
 estão em [hooks-adapters](docs/hooks-adapters.md); o guia geral é
 [extensions](docs/extensions.md). O alvo do cloudflared precisa ser loopback do próprio nó;
