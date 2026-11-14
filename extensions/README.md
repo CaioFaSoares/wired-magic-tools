@@ -143,6 +143,47 @@ ferramenta de mantenedor, não um sidecar e não é semeada no data dir. Use
 `--check`/`--dry-run` antes de `--yes`. Veja
 [`extensions/private/debug-publish/README.md`](private/debug-publish/README.md).
 
+## Adicionar extensões
+
+1. **Embutidas:** cloudflared, chat/chat_gui, debug/debug_gui e seance já
+   aparecem no catálogo embutido da TUI, mesmo antes do data dir ser semeado.
+2. **Local:** copie a pasta para `<data_dir>/extensions/<id>/` (o control lê no
+   boot/reload) ou instale de um repositório git:
+   ```sh
+   wm packages install github:owner/repo --package minha_ext --yes
+   ```
+3. **Ative** o componente de nó na TUI (aba Extensões, `Enter/t`), no painel ou
+   com `wm extensions enable <id>`.
+4. O catálogo local da TUI relê `<data_dir>/extensions` a cada 5s; o catálogo do
+   control só muda depois de **Recarregar manifestos** no painel.
+
+O data dir padrão no macOS é `/usr/local/var/wired-magic` (ou `WM_DATA_DIR`);
+no Linux, `/var/lib/wired-magic`. Se você só abriu `wm tui`, ainda não há data
+dir semeado — por isso o catálogo embutido é mostrado primeiro.
+
+## TUI fornecida pela extensão
+
+Uma extensão pode declarar uma aba na TUI:
+
+```toml
+[tui]
+tab = "Minha aba"
+mode = "snapshot"       # ou "exec" para uma TUI de tela cheia
+command = "{extension_dir}/panel.sh"
+refresh_secs = 5
+```
+
+- `mode = "snapshot"` executa o comando periodicamente e renderiza o JSON
+  `wm-proto::TuiDocument` (título, seções de texto/tabela, rodapé).
+- `mode = "exec"` suspende a TUI principal e abre a interface de tela cheia
+  (ex.: `wm chat`, `wm debug`); ao sair, a TUI volta na mesma aba.
+- `{wm}` vira o binário atual; `{extension_dir}` vira o diretório local da
+  extensão. O comando recebe `WM_EXTENSION_ID`, `WM_DATA_DIR` e `WM_TUI=1`.
+- Exemplo completo: [`examples/extensions/tui-panel`](../examples/extensions/tui-panel).
+
+`chat` e `debug` já declaram abas `exec`; por isso aparecem em cima e também
+podem ser usados como `wm chat`/`wm debug` independentes.
+
 ## Criar uma extensão
 
 - **Pública:** `public/<id>/extension.toml`, `visibility = "public"` e um

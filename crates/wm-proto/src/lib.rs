@@ -172,6 +172,92 @@ pub struct NetworkMap {
 // map carries only the desired state for the node it was built for; the agent
 // reports the observed state through `ReportRequest.extensions`.
 
+/// Optional TUI metadata declared by an extension manifest.
+///
+/// `snapshot` commands are rendered inside a dynamic tab: they must print one
+/// JSON `TuiDocument` and exit. `exec` commands are full-screen terminal
+/// programs (for example `wm chat`) launched by the tab.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TuiSpec {
+    /// Tab title shown in the main TUI.
+    pub tab: String,
+    #[serde(default)]
+    pub mode: TuiMode,
+    /// Command to run. `{wm}` is replaced by the current `wm` executable and
+    /// `{extension_dir}` by the local extension directory when known.
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_tui_refresh")]
+    pub refresh_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuiMode {
+    /// The TUI runs the command periodically and renders its JSON document.
+    #[default]
+    Snapshot,
+    /// The TUI suspends itself and runs the command full-screen.
+    Exec,
+}
+
+fn default_tui_refresh() -> u64 {
+    5
+}
+
+/// JSON contract for `mode = "snapshot"` extension tabs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TuiDocument {
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default)]
+    pub sections: Vec<TuiSection>,
+    #[serde(default)]
+    pub footer: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TuiSection {
+    pub title: String,
+    /// Free-form lines (used when `columns`/`rows` are empty).
+    #[serde(default)]
+    pub lines: Vec<String>,
+    /// Optional table header.
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub rows: Vec<Vec<String>>,
+}
+
+impl TuiSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        let tab = self.tab.trim();
+        if tab.is_empty() || tab.chars().count() > 24 {
+            return Err("tui.tab deve ter 1-24 caracteres".into());
+        }
+        if tab.chars().any(char::is_control) {
+            return Err("tui.tab contém caracteres de controle".into());
+        }
+        if self.command.trim().is_empty() || self.command.len() > 1024 {
+            return Err("tui.command deve ter 1-1024 caracteres".into());
+        }
+        if self.args.len() > 64 {
+            return Err("tui.args aceita no máximo 64 itens".into());
+        }
+        for arg in &self.args {
+            if arg.len() > 4096 || arg.contains('\0') {
+                return Err("tui.args contém argumento inválido".into());
+            }
+        }
+        if self.refresh_secs == 0 || self.refresh_secs > 3_600 {
+            return Err("tui.refresh_secs deve ficar entre 1 e 3600".into());
+        }
+        Ok(())
+    }
+}
+
 /// One extension the node should run. `driver` selects the node-side adapter
 /// (`cloudflared`, `exec`, ...); `config` is owned by the extension.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +358,9 @@ pub struct NodeExtensionView {
     pub requested: bool,
     #[serde(default)]
     pub request_message: Option<String>,
+    /// Interface TUI declarada pela extensão, se houver.
+    #[serde(default)]
+    pub tui: Option<TuiSpec>,
     #[serde(default)]
     pub status: Option<ExtensionStatus>,
 }

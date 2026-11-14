@@ -35,11 +35,13 @@ use ratatui::crossterm::terminal::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use wm_proto::{AgentStatus, ExtensionStatus, NodeExtensionView, PeerStatus, ShareInfo};
+use wm_proto::{
+    AgentStatus, ExtensionStatus, NodeExtensionView, PeerStatus, ShareInfo, TuiMode,
+};
 
 use crate::agent::{AgentEvent, JobEvent};
 use crate::app::{
-    App, FieldKind, Level, Menu, MenuItem, MouseAction, TABS, TAB_AGENT, TAB_CONSOLE,
+    App, FieldKind, Level, Menu, MenuItem, MouseAction, TAB_AGENT, TAB_CONSOLE,
     TAB_EXTENSIONS, TAB_HELP, TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS,
 };
 use crate::persist::EnrolledNode;
@@ -176,7 +178,7 @@ pub fn run_with(data_dir: PathBuf, options: RunOptions) -> anyhow::Result<()> {
     app.save();
     app.last_save = Instant::now();
 
-    let result = event_loop(&mut terminal, &mut app, rx, tx.clone());
+    let result = event_loop(&mut terminal, &mut app, &mut screen, rx, tx.clone());
 
     for pid in app.children.clone() {
         let _ = agent::signal(pid, libc::SIGTERM);
@@ -193,6 +195,7 @@ pub fn run_with(data_dir: PathBuf, options: RunOptions) -> anyhow::Result<()> {
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
+    screen: &mut Screen,
     rx: Receiver<Msg>,
     tx: Sender<Msg>,
 ) -> anyhow::Result<()> {
@@ -202,6 +205,20 @@ fn event_loop(
         }
         if app.quit {
             break;
+        }
+        if let Some(tab) = app.selected_extension_tab() {
+            if tab.spec.mode == TuiMode::Snapshot {
+                let due = tab
+                    .loaded_at
+                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(tab.spec.refresh_secs));
+                if due {
+                    let index = app.tab;
+                    app.load_extension_tab(index);
+                }
+            }
+        }
+        if let Some(id) = app.pending_tui_exec.take() {
+            run_extension_exec(terminal, screen, app, &id);
         }
         terminal.draw(|frame| ui::draw(frame, app))?;
         if event::poll(Duration::from_millis(200))? {
@@ -222,6 +239,85 @@ fn event_loop(
         }
     }
     Ok(())
+}
+
+fn run_extension_exec(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    screen: &mut Screen,
+    app: &mut App,
+    id: &str,
+) {
+    let Some(tab) = app.extension_tabs.iter().find(|tab| tab.id == id).cloned() else {
+        return;
+    };
+    if tab.spec.mode != TuiMode::Exec {
+        return;
+    }
+    let extension_dir = app
+        .local_catalog
+        .iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| entry.path.as_str())
+        .filter(|path| *path != "<embutida>")
+        .map(|path| app.root.join("extensions").join(path));
+    let command = tab
+        .spec
+        .command
+        .replace("{wm}", &app.exe.display().to_string())
+        .replace(
+            "{extension_dir}",
+            &extension_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+        );
+    let args: Vec<String> = tab
+        .spec
+        .args
+        .iter()
+        .map(|arg| {
+            arg.replace("{wm}", &app.exe.display().to_string())
+                .replace(
+                    "{extension_dir}",
+                    &extension_dir
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default(),
+                )
+        })
+        .collect();
+
+    screen.restore();
+    let _ = terminal.show_cursor();
+    let result = std::process::Command::new(&command)
+        .args(&args)
+        .env("WM_EXTENSION_ID", id)
+        .env("WM_DATA_DIR", &app.root)
+        .env("WM_TUI", "1")
+        .status();
+    match Screen::enter(screen.mouse) {
+        Ok(next) => *screen = next,
+        Err(err) => {
+            app.notify(Level::Error, format!("não foi possível retomar a TUI: {err}"));
+            app.quit = true;
+            return;
+        }
+    }
+    let _ = terminal.clear();
+    match result {
+        Ok(status) if status.success() => app.notify(
+            Level::Good,
+            format!("{}: interface encerrada", tab.title),
+        ),
+        Ok(status) => app.notify(
+            Level::Warn,
+            format!("{}: saiu com {status}", tab.title),
+        ),
+        Err(err) => app.notify(
+            Level::Error,
+            format!("{}: não foi possível abrir: {err}", tab.title),
+        ),
+    }
 }
 
 fn maybe_auto_start(app: &mut App, tx: &Sender<Msg>, no_auto_start: bool) {
@@ -551,7 +647,7 @@ fn menu_item(label: impl Into<String>, action: MouseAction) -> MenuItem {
     }
 }
 
-fn menu_items(_app: &App) -> Vec<MenuItem> {
+fn menu_items(app: &App) -> Vec<MenuItem> {
     use MouseAction as A;
     let mut items = vec![
         menu_item("Executar comando no console…", A::OpenConsole),
@@ -586,8 +682,11 @@ fn menu_items(_app: &App) -> Vec<MenuItem> {
         menu_item("Parar job selecionado", A::StopSelectedJob),
         menu_item("Limpar console", A::ClearConsole),
     ];
-    for (index, title) in TABS.iter().enumerate() {
-        items.push(menu_item(format!("Ir para {title}"), A::Tab(index)));
+    for index in 0..app.tab_count() {
+        items.push(menu_item(
+            format!("Ir para {}", app.tab_title(index)),
+            A::Tab(index),
+        ));
     }
     items.push(menu_item("Sair (mantém o agente)", A::Quit));
     items
@@ -727,9 +826,9 @@ fn mouse_scroll(app: &mut App, up: bool, column: u16, row: u16) {
     }
     if crate::app::rect_contains(app.tabs_rect, column, row) {
         app.tab = if up {
-            (app.tab + TABS.len() - 1) % TABS.len()
+            (app.tab + app.tab_count() - 1) % app.tab_count()
         } else {
-            (app.tab + 1) % TABS.len()
+            (app.tab + 1) % app.tab_count()
         };
         app.delete_armed = None;
         return;
@@ -789,7 +888,7 @@ fn execute_mouse(app: &mut App, action: MouseAction, tx: &Sender<Msg>) {
     use MouseAction as A;
     match action {
         A::Tab(index) => {
-            app.tab = index.min(TABS.len() - 1);
+            app.tab = index.min(app.tab_count().saturating_sub(1));
             app.delete_armed = None;
         }
         A::SelectPeer(index) if index < app.peers.len() => {
@@ -933,16 +1032,16 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             return;
         }
         KeyCode::Char(digit @ '1'..='9') => {
-            app.tab = (digit as usize - '1' as usize).min(TABS.len() - 1);
+            app.tab = (digit as usize - '1' as usize).min(app.tab_count().saturating_sub(1));
             return;
         }
         KeyCode::Tab | KeyCode::Right => {
-            app.tab = (app.tab + 1) % TABS.len();
+            app.tab = (app.tab + 1) % app.tab_count();
             app.delete_armed = None;
             return;
         }
         KeyCode::BackTab | KeyCode::Left => {
-            app.tab = (app.tab + TABS.len() - 1) % TABS.len();
+            app.tab = (app.tab + app.tab_count() - 1) % app.tab_count();
             app.delete_armed = None;
             return;
         }
@@ -993,7 +1092,13 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
                     actions::toggle_extension(app, &view, tx);
                 }
             }
-            _ => {}
+            _ => {
+                if let Some(tab) = app.selected_extension_tab() {
+                    if tab.spec.mode == TuiMode::Exec {
+                        app.pending_tui_exec = Some(tab.id.clone());
+                    }
+                }
+            }
         },
         KeyCode::Char('c') if app.tab == TAB_CONSOLE => {
             app.console.clear();

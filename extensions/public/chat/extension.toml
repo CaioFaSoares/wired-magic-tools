@@ -17,3 +17,12 @@ visibility = "public"
 node_driver = "none"
 ui = "generic"
 default_active = false
+
+# Aba própria na TUI principal. Ao ativar/abrir a aba, o `wm tui` suspende a
+# interface e executa `wm chat` no terminal; ao sair, volta para a TUI.
+[tui]
+tab = "Chat"
+mode = "exec"
+command = "{wm}"
+args = ["chat"]
+refresh_secs = 2

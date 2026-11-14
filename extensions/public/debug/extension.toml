@@ -17,3 +17,11 @@ visibility = "public"
 node_driver = "none"
 ui = "generic"
 default_active = false
+
+# Aba própria na TUI principal: executa o dashboard local `wm debug`.
+[tui]
+tab = "Debug"
+mode = "exec"
+command = "{wm}"
+args = ["debug"]
+refresh_secs = 2

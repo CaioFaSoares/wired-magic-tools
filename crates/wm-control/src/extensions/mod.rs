@@ -280,6 +280,7 @@ impl ExtensionRegistry {
                 default_config: !manifest.default_config.is_null(),
                 requested: requests.contains_key(&manifest.id),
                 request_message: requests.get(&manifest.id).cloned(),
+                tui: manifest.tui.clone(),
                 status: statuses.get(&manifest.id).cloned(),
             });
         }

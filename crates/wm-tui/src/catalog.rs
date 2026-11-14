@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
+use wm_proto::TuiSpec;
 
 const MAX_DEPTH: usize = 2;
 const IGNORED: &[&str] = &[".git", ".sources", "node_modules", "target"];
@@ -27,6 +28,7 @@ pub struct Entry {
     pub path: String,
     pub source: String,
     pub commit: String,
+    pub tui: Option<TuiSpec>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -41,6 +43,8 @@ struct Manifest {
     visibility: Option<String>,
     #[serde(default)]
     node_driver: Option<String>,
+    #[serde(default)]
+    tui: Option<TuiSpec>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -81,17 +85,19 @@ pub struct Catalog {
 pub fn scan(root: &Path) -> Catalog {
     let extensions = root.join("extensions");
     let mut catalog = Catalog::default();
-    if !extensions.is_dir() {
+    let has_dir = extensions.is_dir();
+    if !has_dir {
         catalog.error = Some(format!("{} não encontrado", extensions.display()));
-        return catalog;
     }
 
     let discovery = read_json::<DiscoveryState>(&extensions.join(".debug-discovery.json"));
     let packages = read_json::<PackagesLock>(&extensions.join(".packages.json"));
 
     let mut manifests = Vec::new();
-    collect(&extensions, 0, &mut manifests);
-    manifests.sort();
+    if has_dir {
+        collect(&extensions, 0, &mut manifests);
+        manifests.sort();
+    }
 
     for path in manifests {
         let file = path.join("extension.toml");
@@ -133,6 +139,27 @@ pub fn scan(root: &Path) -> Catalog {
             path,
             source: package.map(|package| package.source.clone()).unwrap_or_default(),
             commit: package.map(|package| package.commit.clone()).unwrap_or_default(),
+            tui: manifest.tui,
+        });
+    }
+
+    // Show the embedded catalog even before the data dir is seeded. This is
+    // how a fresh install can see chat/debug/cloudflared immediately.
+    for manifest in wm_ext::builtin_manifests() {
+        if catalog.entries.iter().any(|entry| entry.id == manifest.id) {
+            continue;
+        }
+        catalog.entries.push(Entry {
+            id: manifest.id,
+            name: manifest.name,
+            version: manifest.version,
+            visibility: manifest.visibility.as_str().to_string(),
+            driver: manifest.node_driver.as_str().to_string(),
+            status: "embutida".into(),
+            path: "<embutida>".into(),
+            source: "wm".into(),
+            commit: String::new(),
+            tui: manifest.tui,
         });
     }
     catalog.entries.sort_by(|a, b| a.id.cmp(&b.id));
@@ -212,16 +239,26 @@ mod tests {
         .unwrap();
 
         let catalog = scan(dir.path());
-        assert_eq!(catalog.entries.len(), 2);
-        assert_eq!(catalog.entries[0].id, "chat_gui");
-        assert_eq!(catalog.entries[0].driver, "exec");
-        assert_eq!(catalog.entries[1].visibility, "private");
+        let local: Vec<_> = catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.path != "<embutida>")
+            .collect();
+        assert_eq!(local.len(), 2);
+        assert_eq!(local[0].id, "chat_gui");
+        assert_eq!(local[0].driver, "exec");
+        assert_eq!(local[1].visibility, "private");
+        assert!(catalog.entries.iter().any(|entry| entry.path == "<embutida>"));
     }
 
     #[test]
     fn missing_extensions_dir_is_a_visible_error() {
         let catalog = scan(Path::new("/nonexistent/wm-tui-catalog-test"));
-        assert!(catalog.entries.is_empty());
+        assert!(catalog
+            .entries
+            .iter()
+            .all(|entry| entry.path == "<embutida>"));
+        assert!(catalog.entries.iter().any(|entry| entry.id == "chat"));
         assert!(catalog.error.is_some());
     }
 
@@ -250,6 +287,11 @@ mod tests {
         )
         .unwrap();
         let catalog = scan(dir.path());
-        assert_eq!(catalog.entries[0].status, "nova");
+        let chat = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "chat" && entry.path != "<embutida>")
+            .unwrap();
+        assert_eq!(chat.status, "nova");
     }
 }

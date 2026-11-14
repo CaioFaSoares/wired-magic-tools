@@ -220,6 +220,58 @@ para `<data_dir>/extensions/<id>/` e o lock
 resolve `inputs`/dependências de outros flakes automaticamente e não avalia
 Nix: o “flake” aqui é o contrato repo + ref + subdir + `extension.toml`.
 
+### 2.5 TUI fornecida pela extensão
+
+Uma extensão pode declarar uma **aba própria** na TUI principal. O manifesto
+ganha uma seção `[tui]`:
+
+```toml
+[tui]
+tab = "Chat"
+mode = "exec"          # exec | snapshot
+command = "{wm}"
+args = ["chat"]
+refresh_secs = 5       # usado no modo snapshot
+```
+
+- `mode = "exec"`: a TUI principal é suspensa e o comando roda em tela cheia
+  (ex.: `wm chat`, `wm debug`); ao sair, a TUI é restaurada na mesma aba.
+- `mode = "snapshot"`: a TUI executa o comando periodicamente e renderiza o
+  JSON de `TuiDocument` abaixo. O comando deve terminar rápido e imprimir
+  somente o JSON em stdout.
+- `{wm}` é substituído pelo binário atual; `{extension_dir}` pelo diretório
+  local da extensão, quando conhecido.
+- Variáveis no comando snapshot: `WM_EXTENSION_ID`, `WM_DATA_DIR`, `WM_TUI=1`.
+- Até 8 abas de extensão são exibidas; o catálogo local inclui os manifestos
+  embutidos mesmo antes do data dir ser semeado.
+
+Contrato JSON do `mode = "snapshot"` (definido em `wm-proto::TuiDocument`):
+
+```json
+{
+  "title": "Minha extensão",
+  "subtitle": "resumo opcional",
+  "sections": [
+    {
+      "title": "Status",
+      "lines": ["linha 1", "linha 2"]
+    },
+    {
+      "title": "Tabela",
+      "columns": ["Nome", "Valor"],
+      "rows": [["cpu", "12%"], ["ram", "1.2 GB"]]
+    }
+  ],
+  "footer": "rodapé opcional"
+}
+```
+
+O comando roda com o privilégio do usuário da TUI (root, na prática). Trate o
+manifesto como código confiável, como hooks `exec`.
+
+Exemplo completo em
+[`examples/extensions/tui-panel`](../examples/extensions/tui-panel).
+
 > **Modelo de confiança:** só um admin do control pode gravar configuração, e a
 > extensão roda com o privilégio do agente. Trate o JSON de `exec` como uma unit
 > de systemd: não aponte para binários que você não confiaria em root.

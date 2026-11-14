@@ -40,16 +40,16 @@ flowchart LR
 
 O tap público é [CaioFaSoares/homebrew-tap](https://github.com/CaioFaSoares/homebrew-tap)
 e a instalação é `brew tap CaioFaSoares/tap && brew install CaioFaSoares/tap/wired-magic`
-(detalhes em [Homebrew](docs/homebrew.md)). A release `v0.1.2` já está publicada e a
+(detalhes em [Homebrew](docs/homebrew.md)). A release `v0.1.3` já está publicada e a
 fórmula está no tap; novas versões entram no tap pelo mesmo script. Os binários de
 demonstração em `dist/` não são releases do tap. A publicação local não gasta minutos
 do GitHub Actions; o workflow macOS é apenas um fallback manual.
 
 ```sh
 git status                      # a árvore precisa estar limpa
-scripts/publish_macos.sh --tag v0.1.2 --dry-run
+scripts/publish_macos.sh --tag v0.1.3 --dry-run
 # commit + git push, e então:
-scripts/publish_macos.sh --tag v0.1.2
+scripts/publish_macos.sh --tag v0.1.3
 ```
 
 Ao abrir `wm tui` instalado pelo tap, a TUI verifica e instala versões estáveis mais
@@ -932,8 +932,10 @@ Manifestos ficam em `<data-dir>/extensions/<id>/extension.toml`; extensões decl
 `node_driver = "exec"` e um JSON validado por nó. O servidor pode **solicitar** uma extensão
 para um nó; o pedido aparece no catálogo com `!`, mas o membro decide ativar. A aba
 **Extensões** da TUI mostra o catálogo do control e um **catálogo local** de
-`<data_dir>/extensions`, visível mesmo com o agente parado. Pacotes também podem ser instalados
-de repositórios git no formato flake (`wm packages`). Hooks e adapters
+`<data_dir>/extensions` (mais os manifestos embutidos), visível mesmo com o agente parado.
+Extensões podem declarar uma aba própria com `[tui]` (`snapshot` ou `exec`); `chat` e `debug`
+já fazem isso. Pacotes também podem ser instalados de repositórios git no formato flake
+(`wm packages`). Hooks e adapters
 estão em [hooks-adapters](docs/hooks-adapters.md); o guia geral é
 [extensions](docs/extensions.md). O alvo do cloudflared precisa ser loopback do próprio nó;
 credenciais nunca voltam pela API.

@@ -10,7 +10,7 @@ use wm_proto::{PathKind, ShareKind};
 
 use crate::actions;
 use crate::app::{
-    App, FieldKind, Level, MouseAction, TABS, TAB_AGENT, TAB_CONSOLE, TAB_EXTENSIONS, TAB_HELP,
+    App, FieldKind, Level, MouseAction, TAB_AGENT, TAB_CONSOLE, TAB_EXTENSIONS, TAB_HELP,
     TAB_PEERS, TAB_SERVICES, TAB_SHARES, TAB_STATUS, TAB_TOPOLOGY,
 };
 
@@ -46,7 +46,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         TAB_SERVICES => draw_services(frame, chunks[2], app),
         TAB_CONSOLE => draw_console(frame, chunks[2], app),
         TAB_HELP => draw_help(frame, chunks[2], app),
-        _ => {}
+        _ => draw_extension_tab(frame, chunks[2], app),
     }
     draw_action_bar(frame, chunks[3], app);
     draw_footer(frame, chunks[4], app);
@@ -163,7 +163,10 @@ fn draw_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
     }
     let mut spans: Vec<Span> = Vec::new();
     let mut x = area.x;
-    for (index, title) in TABS.iter().enumerate() {
+    let titles: Vec<String> = (0..app.tab_count())
+        .map(|index| app.tab_title(index).to_string())
+        .collect();
+    for (index, title) in titles.iter().enumerate() {
         let label = format!(" {title} ");
         let width = label.chars().count() as u16;
         if x.saturating_add(width) > area.right() {
@@ -190,7 +193,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
         spans.push(Span::styled(label, style));
         app.register_hit(rect, MouseAction::Tab(index));
         x = x.saturating_add(width);
-        if index + 1 < TABS.len() && x < area.right() {
+        if index + 1 < titles.len() && x < area.right() {
             spans.push(Span::styled("·", Style::default().fg(Color::DarkGray)));
             app.register_hit(
                 Rect {
@@ -1730,6 +1733,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         TAB_SERVICES => " Enter log · g/G GUI · p painel · x para job · i/u serviço · t status",
         TAB_CONSOLE => " : comando · j/k rolar · PgUp/PgDn · Home/End · c limpar",
         TAB_HELP => " j/k rolar · :comando · q sair (agente continua)",
+        _ if app.selected_extension_tab().is_some() => {
+            " Enter abre a interface da extensão · Tab abas · q sair"
+        }
         _ => " :comando · 1…9 abas · q sair (agente continua)",
     };
     frame.render_widget(
@@ -1738,6 +1744,108 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
             Style::default().fg(Color::DarkGray),
         ))),
         chunks[1],
+    );
+}
+
+fn draw_extension_tab(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(tab) = app.selected_extension_tab() else {
+        return;
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(document) = &tab.document {
+        if !document.title.trim().is_empty() {
+            lines.push(Line::from(Span::styled(
+                document.title.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        if let Some(subtitle) = document.subtitle.as_deref() {
+            lines.push(Line::from(Span::styled(
+                subtitle.to_string(),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        lines.push(Line::from(""));
+        for section in &document.sections {
+            lines.push(Line::from(Span::styled(
+                section.title.clone(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in &section.lines {
+                lines.push(Line::from(line.clone()));
+            }
+            if !section.columns.is_empty() {
+                let mut header = String::new();
+                for column in &section.columns {
+                    header.push_str(&format!("{:<22}", truncate(column, 21)));
+                }
+                lines.push(Line::from(Span::styled(
+                    header,
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            for row in &section.rows {
+                let mut text = String::new();
+                for value in row {
+                    text.push_str(&format!("{:<22}", truncate(value, 21)));
+                }
+                lines.push(Line::from(text));
+            }
+            lines.push(Line::from(""));
+        }
+        if let Some(footer) = document.footer.as_deref() {
+            lines.push(Line::from(Span::styled(
+                footer.to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    } else if let Some(error) = &tab.error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(Color::Red),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("comando: {}", tab.spec.command),
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if tab.spec.mode == wm_proto::TuiMode::Exec {
+        lines.push(Line::from(Span::styled(
+            format!("Interface TUI fornecida pela extensão '{}'.", tab.id),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Pressione Enter para abrir. A TUI principal é suspensa e retomada ao sair.",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(""));
+        let mut command = tab.spec.command.clone();
+        for arg in &tab.spec.args {
+            command.push(' ');
+            command.push_str(arg);
+        }
+        lines.push(Line::from(Span::styled(
+            format!("comando: {}", truncate(&command, 120)),
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "carregando a interface da extensão…",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block(format!(" {} ", tab.title)))
+            .wrap(Wrap { trim: false }),
+        area,
     );
 }
 
@@ -2086,6 +2194,7 @@ fn fmt_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::TABS;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -2407,6 +2516,7 @@ mod tests {
             default_config: true,
             requested: false,
             request_message: None,
+            tui: None,
             status: None,
         }];
         app.extensions_table.select(Some(0));
@@ -2487,5 +2597,85 @@ mod tests {
         assert!(text.contains("10.66.0.12:3000"));
         assert!(text.contains("wm://demo"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extension_tui_tabs_render_snapshot_and_exec_modes() {
+        use wm_proto::{TuiMode, TuiSpec};
+
+        let mut app = demo_app("extension-tabs");
+        app.extension_catalog = vec![
+            wm_proto::NodeExtensionView {
+                id: "chat".into(),
+                name: "Chat".into(),
+                tui: Some(TuiSpec {
+                    tab: "Chat".into(),
+                    mode: TuiMode::Exec,
+                    command: "{wm}".into(),
+                    args: vec!["chat".into()],
+                    refresh_secs: 2,
+                }),
+                ..base_extension_view("chat")
+            },
+            wm_proto::NodeExtensionView {
+                id: "panel".into(),
+                name: "Panel".into(),
+                tui: Some(TuiSpec {
+                    tab: "Painel".into(),
+                    mode: TuiMode::Snapshot,
+                    command: "/bin/true".into(),
+                    args: Vec::new(),
+                    refresh_secs: 2,
+                }),
+                ..base_extension_view("panel")
+            },
+        ];
+        app.rebuild_extension_tabs();
+        assert_eq!(app.tab_count(), crate::app::TABS.len() + 2);
+
+        app.tab = crate::app::TABS.len();
+        let text = render(&mut app, 110, 30);
+        assert!(text.contains("Interface TUI fornecida"));
+        assert!(text.contains("Chat"));
+
+        app.tab = crate::app::TABS.len() + 1;
+        let text = render(&mut app, 110, 30);
+        assert!(text.contains("Painel"));
+        std::fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn embedded_catalog_contributes_tabs_even_without_data_dir() {
+        let mut app = demo_app("embedded-tabs");
+        app.local_catalog = crate::catalog::scan(&app.root).entries;
+        app.extension_catalog.clear();
+        app.rebuild_extension_tabs();
+        let titles: Vec<&str> = (0..app.tab_count())
+            .map(|index| app.tab_title(index))
+            .collect();
+        assert!(titles.contains(&"Chat"));
+        assert!(titles.contains(&"Debug"));
+        assert!(app.local_catalog.iter().any(|entry| entry.id == "chat_gui"));
+        std::fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    fn base_extension_view(id: &str) -> wm_proto::NodeExtensionView {
+        wm_proto::NodeExtensionView {
+            id: id.into(),
+            name: id.into(),
+            version: "0.1.0".into(),
+            description: String::new(),
+            driver: "none".into(),
+            ui: "generic".into(),
+            builtin: false,
+            active: false,
+            configured: false,
+            activation_revision: 0,
+            default_config: false,
+            requested: false,
+            request_message: None,
+            tui: None,
+            status: None,
+        }
     }
 }

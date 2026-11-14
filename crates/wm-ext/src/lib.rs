@@ -26,6 +26,6 @@ pub use manifest::{
     AdapterExpose, AdapterShare, AdapterSpec, CHAT_ID, CLOUDFLARED_DRIVER, CLOUDFLARED_ID,
     EXEC_DRIVER, ExtensionManifest, ExtensionVisibility, LoadedManifests, NodeDriver,
     builtin_chat_gui_manifest, builtin_chat_tui_manifest, builtin_cloudflared_manifest,
-    builtin_debug_gui_manifest, builtin_debug_tui_manifest, builtin_seance_manifest, load_dir,
-    seed_builtin_manifests, valid_id,
+    builtin_debug_gui_manifest, builtin_debug_tui_manifest, builtin_manifests,
+    builtin_seance_manifest, load_dir, seed_builtin_manifests, valid_id,
 };

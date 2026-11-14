@@ -105,6 +105,9 @@ pub struct ExtensionManifest {
     /// `generic` (JSON editor). Absent means generic.
     #[serde(default)]
     pub ui: Option<String>,
+    /// Optional TUI tab/interface contributed by the extension.
+    #[serde(default)]
+    pub tui: Option<wm_proto::TuiSpec>,
     /// Whether the extension starts active for a freshly enrolled node. Most
     /// node-side extensions are opt-in; creating a config/route may activate.
     #[serde(default)]
@@ -581,6 +584,19 @@ pub fn builtin_debug_tui_manifest() -> ExtensionManifest {
 
 pub fn builtin_debug_gui_manifest() -> ExtensionManifest {
     toml::from_str(DEBUG_GUI_MANIFEST_TOML).expect("manifesto debug_gui embutido válido")
+}
+
+/// All embedded manifests, in catalog order. Used by the TUI to show the
+/// built-in catalog even when the data dir has not been seeded yet.
+pub fn builtin_manifests() -> Vec<ExtensionManifest> {
+    vec![
+        builtin_cloudflared_manifest(),
+        builtin_chat_tui_manifest(),
+        builtin_chat_gui_manifest(),
+        builtin_debug_tui_manifest(),
+        builtin_debug_gui_manifest(),
+        builtin_seance_manifest(),
+    ]
 }
 
 pub fn builtin_seance_manifest() -> ExtensionManifest {

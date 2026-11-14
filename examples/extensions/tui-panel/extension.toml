@@ -1,0 +1,19 @@
+# Exemplo de aba TUI em modo snapshot.
+#
+# Instale este diretório em <data_dir>/extensions/tui-panel ou use
+# `wm packages install examples/extensions --package tui-panel --yes`.
+id = "tui-panel"
+name = "TUI Panel Example"
+version = "0.1.0"
+description = "Exemplo de extensão que contribui uma aba com dados JSON."
+author = "operação"
+visibility = "public"
+node_driver = "none"
+ui = "generic"
+default_active = false
+
+[tui]
+tab = "Exemplo"
+mode = "snapshot"
+command = "{extension_dir}/panel.sh"
+refresh_secs = 5
