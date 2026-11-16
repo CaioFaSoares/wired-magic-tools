@@ -119,6 +119,7 @@ pub struct SnapshotCache {
 pub struct PersistedState {
     pub version: u32,
     pub tab: usize,
+    pub extension_id: Option<String>,
     pub peer_index: usize,
     pub share_index: usize,
     pub auto_start: bool,
@@ -139,6 +140,7 @@ impl Default for PersistedState {
         Self {
             version: STATE_VERSION,
             tab: 0,
+            extension_id: None,
             peer_index: 0,
             share_index: 0,
             auto_start: true,

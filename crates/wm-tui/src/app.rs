@@ -132,6 +132,9 @@ pub enum MouseAction {
     RestartAgent,
     ToggleAutoStart,
     AgentSettings,
+    EditExtension,
+    ExtensionLogs,
+    ExtensionSection(usize),
     AgentLog,
     Doctor,
     InstallService,
@@ -158,6 +161,7 @@ pub enum MouseAction {
     OpenGui,
     CloseGui,
     AdminPanel,
+    RemoteAdmin,
     StartHost,
     StartServe,
     StopSelectedJob,
@@ -354,6 +358,7 @@ pub enum FormAction {
     RenameShare(Uuid),
     RenameNode,
     AgentSettings,
+    ExtensionSettings(String),
     ProbePort,
     /// Edits the presentation identity of the active enrollment.
     Profile,
@@ -495,6 +500,9 @@ pub struct App {
     pub extension_tabs: Vec<ExtensionTab>,
     /// Comando exec pedido por uma aba; o event loop suspende a TUI e executa.
     pub pending_tui_exec: Option<String>,
+    /// Open the remote admin console after yielding the local terminal.
+    pub pending_remote_admin: bool,
+    pub extension_logs_pending: bool,
     /// PTYs embutidos das abas `mode = "pane"`.
     pub panes: std::collections::HashMap<String, crate::pane::Pane>,
     pub pane_errors: std::collections::HashMap<String, String>,
@@ -513,6 +521,13 @@ pub struct App {
     pub catalog_table: TableState,
     /// `true` quando o foco de teclado está no catálogo local.
     pub catalog_focus: bool,
+    pub extension_section: usize,
+    pub discovery_catalog: Vec<crate::catalog::Entry>,
+    pub discovery_error: Option<String>,
+    pub extension_preferences: wm_ext::ExtensionPreferencesStore,
+    pub autoloaded: std::collections::HashSet<String>,
+    pub restore_extension_id: Option<String>,
+    pub snapshot_rx: Option<std::sync::mpsc::Receiver<(String, TuiSpec, Result<TuiDocument, String>)>>,
     pub jobs: Vec<Job>,
     pub agent: AgentView,
     pub settings: AgentSettings,
@@ -567,6 +582,7 @@ impl App {
     /// Rebuilds the dynamic tabs from the control + local catalogs, preserving
     /// the loaded document of tabs whose id/spec did not change.
     pub fn rebuild_extension_tabs(&mut self) {
+        let selected = self.selected_extension_tab().map(|t| t.id.clone());
         let mut specs: std::collections::BTreeMap<String, (String, TuiSpec)> =
             std::collections::BTreeMap::new();
         for view in &self.extension_catalog {
@@ -579,7 +595,7 @@ impl App {
                 specs.insert(view.id.clone(), (title, spec.clone()));
             }
         }
-        for entry in &self.local_catalog {
+        for entry in self.local_catalog.iter().chain(self.discovery_catalog.iter()) {
             if let Some(spec) = &entry.tui {
                 specs.entry(entry.id.clone()).or_insert_with(|| {
                     let title = if spec.tab.trim().is_empty() {
@@ -600,11 +616,22 @@ impl App {
         .collect();
 
         let mut tabs = Vec::new();
-        for (id, (title, spec)) in specs.into_iter().take(8) {
+        for (id, (title, mut spec)) in specs {
+            if spec.validate().is_err() { continue; }
+            if let Some(prefs) = self.extension_preferences.extensions.get(&id) {
+                spec.options.extend(prefs.options.clone());
+            }
             let previous = old.remove(&id);
             let (document, error, loaded_at) = match previous {
                 Some(tab) if tab.spec == spec => (tab.document, tab.error, tab.loaded_at),
-                _ => (None, None, None),
+                _ => {
+                    // Presentation settings changed: don't keep a PTY running
+                    // with stale options or suppress a fresh autoload attempt.
+                    self.panes.remove(&id);
+                    self.pane_errors.remove(&id);
+                    self.autoloaded.remove(&id);
+                    (None, None, None)
+                },
             };
             tabs.push(ExtensionTab {
                 id,
@@ -615,7 +642,28 @@ impl App {
                 loaded_at,
             });
         }
+        for id in old.keys() {
+            self.panes.remove(id);
+            self.pane_errors.remove(id);
+            self.autoloaded.remove(id);
+        }
         self.extension_tabs = tabs;
+        // A remote-only tab may arrive after the first local snapshot. Keep its
+        // saved ID pending until it is actually available, rather than restoring
+        // an unrelated numeric tab or consuming it on an empty catalog.
+        let restore = selected.or_else(|| {
+            let id = self.restore_extension_id.as_ref()?;
+            if !self.extension_preferences.extensions.get(id).is_some_and(|p| p.favorite) {
+                self.restore_extension_id = None;
+                return None;
+            }
+            self.extension_tabs.iter().any(|tab| &tab.id == id)
+                .then(|| self.restore_extension_id.take()).flatten()
+        });
+        if let Some(id) = restore {
+            self.tab = self.extension_tabs.iter().position(|t| t.id == id)
+                .map(|i| TABS.len() + i).unwrap_or(TAB_EXTENSIONS);
+        }
         let count = self.tab_count();
         if self.tab >= count {
             self.tab = count.saturating_sub(1);
@@ -631,17 +679,14 @@ impl App {
         {
             self.extensions_table.select(Some(0));
         }
-        if !self.local_catalog.is_empty()
-            && self
-                .catalog_table
-                .selected()
-                .is_none_or(|index| index >= self.local_catalog.len())
-        {
+        let len = self.active_catalog().len();
+        if len == 0 {
+            self.catalog_table.select(None);
+        } else if self.catalog_table.selected().is_none_or(|index| index >= len) {
             self.catalog_table.select(Some(0));
         }
-        if self.extension_catalog.is_empty() && !self.local_catalog.is_empty() {
-            self.catalog_focus = true;
-        }
+        // Nested sections own their focus, even when the agent is offline.
+        self.catalog_focus = self.extension_section != 0;
     }
 
     /// Runs a `mode = "snapshot"` tab command and stores its JSON document.
@@ -655,72 +700,21 @@ impl App {
         if tab.spec.mode != TuiMode::Snapshot {
             return;
         }
-        let id = tab.id.clone();
-        let spec = tab.spec.clone();
-        let extension_dir = self
-            .local_catalog
-            .iter()
-            .find(|entry| entry.id == id)
-            .map(|entry| entry.path.as_str())
-            .filter(|path| *path != "<embutida>")
-            .map(|path| self.root.join("extensions").join(path));
-        let command = spec
-            .command
-            .replace("{wm}", &self.exe.display().to_string());
-        let command = command.replace(
-            "{extension_dir}",
-            &extension_dir
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-        );
-        let args: Vec<String> = spec
-            .args
-            .iter()
-            .map(|arg| {
-                let arg = arg.replace("{wm}", &self.exe.display().to_string());
-                arg.replace(
-                    "{extension_dir}",
-                    &extension_dir
-                        .as_ref()
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_default(),
-                )
-            })
-            .collect();
-
-        let output = std::process::Command::new(&command)
-            .args(&args)
-            .env("WM_EXTENSION_ID", &id)
-            .env("WM_DATA_DIR", &self.root)
-            .env("WM_TUI", "1")
-            .output();
-        let (document, error) = match output {
-            Ok(output) if output.status.success() => {
-                match serde_json::from_slice::<TuiDocument>(&output.stdout) {
-                    Ok(document) => (Some(document), None),
-                    Err(err) => (None, Some(format!("JSON da TUI inválido: {err}"))),
-                }
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let message = stderr.trim();
-                (
-                    None,
-                    Some(if message.is_empty() {
-                        format!("comando saiu com {}", output.status)
-                    } else {
-                        truncate_text(message, 240)
-                    }),
-                )
-            }
-            Err(err) => (None, Some(format!("não foi possível executar {command}: {err}"))),
-        };
-        if let Some(tab) = self.extension_tabs.get_mut(extension_index) {
-            tab.document = document;
-            tab.error = error;
-            tab.loaded_at = Some(Instant::now());
-        }
+        if self.snapshot_rx.is_some() { return; }
+        let tab = tab.clone();
+        let (command, args, cwd) = crate::resolve_tui_command(self, &tab);
+        let mut process = std::process::Command::new(command);
+        process.args(args).env("WM_EXTENSION_ID", &tab.id)
+            .env("WM_DATA_DIR", &self.root).env("WM_TUI", "1")
+            .env("WM_API_SOCKET", &self.socket).env("WM_API_VERSION", "1")
+            .env("WM_CONTEXT_METHOD", wm_ext::CONTEXT_METHOD);
+        if let Some(cwd) = cwd { process.current_dir(cwd); }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.snapshot_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = crate::extension_ui::snapshot(process, std::time::Duration::from_secs(5));
+            let _ = tx.send((tab.id, tab.spec, result));
+        });
     }
 
     pub fn load(root: PathBuf) -> Self {
@@ -733,6 +727,11 @@ impl App {
         let share_index = state.share_index;
 
         let root_for_registry = root.clone();
+        let (extension_preferences, preferences_warning) =
+            match wm_ext::ExtensionPreferencesStore::load(&root) {
+                Ok(store) => (store, None),
+                Err(error) => (Default::default(), Some(error)),
+            };
         let mut app = Self {
             root,
             desktop_root: None,
@@ -746,7 +745,7 @@ impl App {
             exe,
             socket: socket.clone(),
             log_path,
-            tab: state.tab.min(TABS.len() - 1),
+            tab: if state.tab < TABS.len() { state.tab } else { TAB_EXTENSIONS },
             status: None,
             peers: Vec::new(),
             shares: Vec::new(),
@@ -756,6 +755,8 @@ impl App {
             catalog_error: None,
             extension_tabs: Vec::new(),
             pending_tui_exec: None,
+            pending_remote_admin: false,
+            extension_logs_pending: false,
             panes: std::collections::HashMap::new(),
             pane_errors: std::collections::HashMap::new(),
             node: None,
@@ -770,6 +771,13 @@ impl App {
             extensions_table: TableState::default(),
             catalog_table: TableState::default(),
             catalog_focus: false,
+            extension_section: 0,
+            discovery_catalog: Vec::new(),
+            discovery_error: None,
+            extension_preferences,
+            autoloaded: std::collections::HashSet::new(),
+            restore_extension_id: state.extension_id.clone(),
+            snapshot_rx: None,
             jobs: Vec::new(),
             agent: AgentView::default(),
             settings: state.settings.clone(),
@@ -871,6 +879,9 @@ impl App {
         if let Some(warning) = warning {
             app.notify(Level::Warn, warning);
         }
+        if let Some(warning) = preferences_warning {
+            app.notify(Level::Warn, format!("preferências de extensões não carregadas: {warning}"));
+        }
         match persist::load_enrolled(&app.root) {
             Ok(node) => app.node = node,
             Err(err) => {
@@ -958,7 +969,7 @@ impl App {
     pub fn selected_catalog(&self) -> Option<&crate::catalog::Entry> {
         self.catalog_table
             .selected()
-            .and_then(|index| self.local_catalog.get(index))
+            .and_then(|index| self.active_catalog().get(index))
     }
 
     pub fn selected_extension(&self) -> Option<&NodeExtensionView> {
@@ -1126,7 +1137,11 @@ impl App {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: crate::Snapshot) {
+        let selected_local = self.selected_catalog().map(|e| e.id.clone());
         self.local_catalog = snapshot.local_catalog;
+        if self.extension_section != 2 {
+            self.catalog_table.select(selected_local.and_then(|id| self.local_catalog.iter().position(|e| e.id == id)));
+        }
         self.catalog_error = snapshot.catalog_error;
         self.error = snapshot.error;
         if let Some(status) = snapshot.status {
@@ -1160,7 +1175,9 @@ impl App {
             self.peers = snapshot.peers;
             self.shares = snapshot.shares;
             self.extensions = snapshot.extensions;
+            let selected = self.selected_extension().map(|e| e.id.clone());
             self.extension_catalog = snapshot.extension_catalog;
+            self.extensions_table.select(selected.and_then(|id| self.extension_catalog.iter().position(|e| e.id == id)));
             self.rebuild_extension_tabs();
             self.ensure_catalog_selection();
             self.cached_at = Some(Utc::now());
@@ -1264,6 +1281,7 @@ impl App {
         PersistedState {
             version: persist::STATE_VERSION,
             tab: self.tab,
+            extension_id: self.selected_extension_tab().map(|t| t.id.clone()),
             peer_index: self.table.selected().unwrap_or(0),
             share_index: self.shares_table.selected().unwrap_or(0),
             auto_start: self.auto_start,

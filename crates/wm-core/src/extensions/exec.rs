@@ -28,7 +28,7 @@ pub(crate) async fn run(config: ExecConfig, reporter: Reporter, cancel: Cancella
         if let Some(dir) = &config.working_dir {
             spec = spec.cwd(dir);
         }
-        let process = match ManagedProcess::spawn(&spec) {
+        let process = match ManagedProcess::spawn_logged(&spec, Some(reporter.logs.clone()), "exec.") {
             Ok(process) => process,
             Err(err) => {
                 reporter.set(
@@ -78,7 +78,7 @@ pub(crate) async fn run(config: ExecConfig, reporter: Reporter, cancel: Cancella
                 } => {
                     match line {
                         Some(line) => {
-                            tracing::debug!(target: "wm::ext::exec", command = %config.command, %line, "sidecar");
+                            tracing::debug!(target: "wm::ext::exec", line = %super::logs::sanitize(&line), "sidecar");
                             if looks_like_error(&line) {
                                 reporter.update(|status| {
                                     status.message = Some(clip_line(&line));
@@ -97,6 +97,7 @@ pub(crate) async fn run(config: ExecConfig, reporter: Reporter, cancel: Cancella
             return;
         }
 
+        process.finish_output().await;
         let exit = exit.unwrap_or_else(|| Err(std::io::Error::other("processo sem status")));
         let success = exit.as_ref().map(|status| status.success()).unwrap_or(false);
         let code = match &exit {
@@ -106,6 +107,7 @@ pub(crate) async fn run(config: ExecConfig, reporter: Reporter, cancel: Cancella
                 .unwrap_or_else(|| "sinal".into()),
             Err(err) => err.to_string(),
         };
+        reporter.logs.record("lifecycle", &format!("exec exited: {code}"));
         let restart = match config.restart {
             RestartPolicy::Always => true,
             RestartPolicy::OnFailure => !success,
@@ -122,6 +124,7 @@ pub(crate) async fn run(config: ExecConfig, reporter: Reporter, cancel: Cancella
             );
             return;
         }
+        reporter.logs.record("lifecycle", &format!("exec restarting in {}s", backoff.as_secs()));
         reporter.set(
             if success {
                 ExtensionState::Stopped

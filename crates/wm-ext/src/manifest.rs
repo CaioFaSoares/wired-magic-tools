@@ -108,6 +108,10 @@ pub struct ExtensionManifest {
     /// Optional TUI tab/interface contributed by the extension.
     #[serde(default)]
     pub tui: Option<wm_proto::TuiSpec>,
+    /// Core-first interface and deployment-region contract. Legacy manifests
+    /// may omit it; it never grants activation or installation permission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub components: Option<crate::ExtensionComponents>,
     /// Whether the extension starts active for a freshly enrolled node. Most
     /// node-side extensions are opt-in; creating a config/route may activate.
     #[serde(default)]
@@ -300,6 +304,12 @@ impl ExtensionManifest {
         validate_hook("activate", self.hooks.activate.as_ref())?;
         validate_hook("deactivate", self.hooks.deactivate.as_ref())?;
         self.adapter.validate()?;
+        if let Some(tui) = &self.tui {
+            tui.validate()?;
+        }
+        if let Some(components) = &self.components {
+            components.validate()?;
+        }
         if !self.default_config.is_null() {
             if self.node_driver == NodeDriver::Exec {
                 let config: crate::ExecConfig = serde_json::from_value(self.default_config.clone())
@@ -651,6 +661,7 @@ command = "hello"
             "# old"
         );
         let loaded = load_dir(dir.path());
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(loaded.manifests.len(), 6);
         let m = loaded
             .manifests
@@ -670,6 +681,9 @@ command = "hello"
         assert_eq!(chat.node_driver, NodeDriver::None);
         assert_eq!(chat.visibility, ExtensionVisibility::Public);
         assert!(chat.hooks.install.is_none());
+        let components = chat.components.as_ref().expect("migrated core-first chat");
+        assert!(components.core && components.cli && components.tui && !components.gui);
+        assert_eq!(components.server_extension.as_deref(), Some("chat_gui"));
         let chat_gui = loaded
             .manifests
             .iter()
@@ -699,6 +713,8 @@ command = "hello"
         assert_eq!(debug.node_driver, NodeDriver::None);
         assert_eq!(debug.visibility, ExtensionVisibility::Public);
         assert!(debug.hooks.install.is_none());
+        let components = debug.components.as_ref().expect("migrated core-first debug");
+        assert!(components.core && components.cli && components.tui && !components.gui);
         let debug_gui = loaded
             .manifests
             .iter()

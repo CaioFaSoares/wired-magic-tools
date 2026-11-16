@@ -29,6 +29,24 @@ async fn boot() -> (tempfile::TempDir, Arc<AppState>) {
     (dir, state)
 }
 
+#[tokio::test]
+async fn remote_admin_session_does_not_cross_servers_or_skip_csrf() {
+    let (_dir_a, state_a) = boot().await;
+    let (_dir_b, state_b) = boot().await;
+    let app_a = wm_control::api::router(state_a);
+    let app_b = wm_control::api::router(state_b);
+    let admin_a = login(&app_a).await;
+    let (status, _) = request(&app_a, "GET", "/api/v1/admin/extensions", Some(&admin_a), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = request(&app_b, "GET", "/api/v1/admin/extensions", Some(&admin_a), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "uma sessão de A não autoriza B");
+    let wrong_csrf = Admin { cookie: admin_a.cookie.clone(), csrf: "wrong".into() };
+    let (status, _) = request(&app_a, "POST", "/api/v1/admin/extensions/reload", Some(&wrong_csrf), None, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = request(&app_a, "GET", "/api/v1/admin/nodes", None, Some("node-token-is-not-an-admin-session"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
 struct Admin {
     cookie: String,
     csrf: String,

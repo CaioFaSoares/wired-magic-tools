@@ -92,6 +92,26 @@ pub fn submit_form(app: &mut App, tx: &Sender<Msg>) {
     };
     let action = form.action.clone();
     match action {
+        FormAction::ExtensionSettings(id) => {
+            let options: std::collections::BTreeMap<String, String> = match serde_json::from_str(form.value(2)) {
+                Ok(options) => options,
+                Err(e) => return restore_error(app, form, format!("JSON inválido: {e}")),
+            };
+            if options.keys().any(|key| ["token", "secret", "password", "credential", "api_key"].iter().any(|part| key.to_lowercase().contains(part))) {
+                return restore_error(app, form, "não armazene segredos nas opções TUI");
+            }
+            let mut store = match wm_ext::ExtensionPreferencesStore::load(&app.root) {
+                Ok(store) => store,
+                Err(e) => return restore_error(app, form, e),
+            };
+            store.extensions.insert(id, wm_ext::ExtensionPreferences {
+                favorite: form.bool_at(0), autoload: form.bool_at(1), options,
+            });
+            if let Err(e) = store.save(&app.root) { return restore_error(app, form, e); }
+            app.extension_preferences = store;
+            app.rebuild_extension_tabs();
+            app.notify(Level::Good, "preferências TUI salvas; serviços não foram alterados");
+        }
         FormAction::Join => {
             if app.desktop_root.is_some() {
                 return restore_error(app, form, "enrollment root não implementado neste fluxo incremental; o desktop conecta apenas a nó root já inscrito");

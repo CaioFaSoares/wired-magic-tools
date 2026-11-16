@@ -905,6 +905,7 @@ async fn run_inner(
             tracing::error!(%err, "forward de portas encerrou");
         }
     }));
+    let extension_logs = crate::extensions::logs::ExtensionLogs::default();
     let hook_ctx = crate::extensions::hooks::HookContext {
         node_id: state.node_id,
         node_name: state.node_name.clone(),
@@ -914,11 +915,12 @@ async fn run_inner(
         extensions_dir: cfg.data_dir.join("extensions"),
     };
     if !cfg.disable_extensions {
-        tasks.push(tokio::spawn(crate::extensions::run(
+        tasks.push(tokio::spawn(crate::extensions::run_with_logs(
             extensions_rx,
             extension_status_tx,
             cfg.data_dir.join("extensions"),
             hook_ctx,
+            extension_logs.clone(),
         )));
     }
     let report_runtime = AgentRuntime {
@@ -973,6 +975,7 @@ async fn run_inner(
             local_snapshot,
             local_cmd,
             local_extensions,
+            extension_logs,
             local_control,
             local_token,
             local_state_path,

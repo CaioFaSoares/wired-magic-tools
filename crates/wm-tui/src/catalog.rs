@@ -118,6 +118,12 @@ pub fn scan(root: &Path) -> Catalog {
         if manifest.id.trim().is_empty() {
             continue;
         }
+        if let Some(spec) = &manifest.tui {
+            if let Err(err) = spec.validate() {
+                catalog.error = Some(format!("{}: TUI inválida: {err}", file.display()));
+                continue;
+            }
+        }
         let package = packages.packages.get(&manifest.id);
         let status = catalog_status(discovery.entries.get(&manifest.id));
         let path = path
@@ -164,6 +170,26 @@ pub fn scan(root: &Path) -> Catalog {
     }
     catalog.entries.sort_by(|a, b| a.id.cmp(&b.id));
     catalog
+}
+
+/// Actual filesystem discovery, including the workspace, without embedded entries.
+/// Paths are absolute so opening a discovered TUI resolves its own assets.
+pub fn discover(root: &Path, cwd: &Path) -> Catalog {
+    let mut result = Catalog::default();
+    for base in [root, cwd] {
+        if !base.join("extensions").is_dir() { continue; }
+        let catalog = scan(base);
+        if catalog.error.is_some() { result.error = catalog.error; }
+        for mut entry in catalog.entries {
+            if entry.path == "<embutida>" { continue; }
+            entry.path = base.join("extensions").join(&entry.path).display().to_string();
+            if !result.entries.iter().any(|e| e.id == entry.id) {
+                result.entries.push(entry);
+            }
+        }
+    }
+    result.entries.sort_by(|a, b| a.id.cmp(&b.id));
+    result
 }
 
 fn catalog_status(record: Option<&DiscoveryRecord>) -> String {
@@ -220,6 +246,22 @@ fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_invalid_tui_and_discovers_workspace_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let dir = cwd.path().join("extensions/custom");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("extension.toml"), "id='custom'\nname='Custom'\n[tui]\ntab='Custom'\ncommand='echo'\nrefresh_secs=0\n").unwrap();
+        let result = discover(root.path(), cwd.path());
+        assert!(result.entries.is_empty());
+        assert!(result.error.unwrap().contains("refresh_secs"));
+        fs::write(dir.join("extension.toml"), "id='custom'\nname='Custom'\n[tui]\ntab='Custom'\ncommand='echo'\n").unwrap();
+        let result = discover(root.path(), cwd.path());
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].path, dir.display().to_string());
+    }
 
     #[test]
     fn scans_flat_and_nested_manifests() {

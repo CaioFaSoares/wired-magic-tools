@@ -8,11 +8,18 @@
 //!   reconciles the desired state received in the map.
 //!
 //! This crate contains the pieces both halves share: the on-disk manifest
-//! format, the node driver configuration contracts and their validation. It has
-//! no async runtime and no I/O beyond the manifest loader, so it can be used by
-//! tests and tooling as well as by both daemons.
+//! format, the node driver configuration contracts and their validation. It
+//! also exposes an asynchronous, typed remote admin client for CLI/TUI tooling.
 
+pub mod admin;
+pub use admin::{AdminClient, AdminClientOptions, AdminError, AdminSession};
 pub mod cloudflared;
+pub mod components;
+pub mod context;
+pub use context::{ExtensionContext, ServerContext, CONTEXT_API_VERSION, CONTEXT_METHOD};
+pub mod preferences;
+pub use preferences::{ExtensionPreferences, ExtensionPreferencesStore};
+pub use components::{ExtensionComponents, ExtensionRegion};
 pub mod exec;
 pub mod manifest;
 

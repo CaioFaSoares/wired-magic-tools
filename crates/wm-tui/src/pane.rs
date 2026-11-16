@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use portable_pty::{
@@ -20,7 +21,11 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::Msg;
 
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
 pub struct Pane {
+    /// Distinguishes reader events from successive PTYs sharing an extension ID.
+    pub generation: u64,
     pub master: Box<dyn MasterPty + Send>,
     pub writer: Box<dyn Write + Send>,
     pub child: Box<dyn Child + Send + Sync>,
@@ -80,6 +85,7 @@ impl Pane {
             .map_err(|err| err.to_string())?;
 
         let pane_id = id.clone();
+        let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         thread::spawn(move || {
             let mut buffer = [0u8; 8192];
             loop {
@@ -89,6 +95,7 @@ impl Pane {
                         if tx
                             .send(Msg::PaneData {
                                 id: pane_id.clone(),
+                                generation,
                                 bytes: buffer[..n].to_vec(),
                             })
                             .is_err()
@@ -99,10 +106,11 @@ impl Pane {
                     Err(_) => break,
                 }
             }
-            let _ = tx.send(Msg::PaneClosed { id: pane_id });
+            let _ = tx.send(Msg::PaneClosed { id: pane_id, generation });
         });
 
         Ok(Self {
+            generation,
             master: pair.master,
             writer,
             child,
@@ -112,6 +120,51 @@ impl Pane {
             exited: false,
             exit: None,
         })
+    }
+
+    /// In-memory PTY substitute for event-routing tests; never spawns a process.
+    #[cfg(test)]
+    pub(crate) fn test_fixture(generation: u64) -> Self {
+        #[derive(Debug)]
+        struct FakePty;
+        impl MasterPty for FakePty {
+            fn resize(&self, _: PtySize) -> anyhow::Result<()> { Ok(()) }
+            fn get_size(&self) -> anyhow::Result<PtySize> {
+                Ok(PtySize { rows: 4, cols: 40, pixel_width: 0, pixel_height: 0 })
+            }
+            fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
+                Ok(Box::new(std::io::empty()))
+            }
+            fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
+                Ok(Box::new(std::io::sink()))
+            }
+            #[cfg(unix)]
+            fn process_group_leader(&self) -> Option<libc::pid_t> { None }
+            #[cfg(unix)]
+            fn as_raw_fd(&self) -> Option<std::os::fd::RawFd> { None }
+            #[cfg(unix)]
+            fn tty_name(&self) -> Option<std::path::PathBuf> { None }
+        }
+        #[derive(Debug)]
+        struct FakeChild;
+        impl portable_pty::ChildKiller for FakeChild {
+            fn kill(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(Self)
+            }
+        }
+        impl Child for FakeChild {
+            fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> { Ok(None) }
+            fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+                Ok(portable_pty::ExitStatus::with_exit_code(0))
+            }
+            fn process_id(&self) -> Option<u32> { None }
+        }
+        Self {
+            generation, master: Box::new(FakePty), writer: Box::new(std::io::sink()),
+            child: Box::new(FakeChild), parser: vt100::Parser::new(4, 40, 0),
+            rows: 4, cols: 40, exited: false, exit: None,
+        }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {

@@ -26,6 +26,7 @@ use wm_proto::ExtensionState;
 
 use super::process::{ManagedProcess, ProcessSpec, clip_line, looks_like_error};
 use super::Reporter;
+use super::logs::LogSink;
 
 #[derive(Debug, Clone, Serialize)]
 struct RouteLive {
@@ -104,8 +105,9 @@ pub(crate) async fn run(
         let live = live.clone();
         let notify = notify_tx.clone();
         let cancel = child_cancel.clone();
+        let logs = reporter.logs.clone();
         join.spawn(async move {
-            run_quick(route, binary, live, notify, cancel).await;
+            run_quick(route, binary, live, notify, cancel, logs).await;
         });
     }
 
@@ -118,8 +120,9 @@ pub(crate) async fn run(
                     let notify = notify_tx.clone();
                     let cancel = child_cancel.clone();
                     let routes = config.named.clone();
+                    let logs = reporter.logs.clone();
                     join.spawn(async move {
-                        run_named(routes, binary, config_path, live, notify, cancel).await;
+                        run_named(routes, binary, config_path, live, notify, cancel, logs).await;
                     });
                 }
                 Err(err) => {
@@ -203,6 +206,7 @@ async fn run_quick(
     live: Arc<Mutex<Live>>,
     notify: mpsc::Sender<()>,
     cancel: CancellationToken,
+    logs: LogSink,
 ) {
     let local_url = match validate_local_url(&route.local_url) {
         Ok(url) => url,
@@ -234,7 +238,7 @@ async fn run_quick(
             "--url",
             local_url.as_str(),
         ]);
-        let mut process = match ManagedProcess::spawn(&spec) {
+        let mut process = match ManagedProcess::spawn_logged(&spec, Some(logs.clone()), "cloudflared.") {
             Ok(process) => process,
             Err(err) => {
                 set_route(
@@ -279,7 +283,7 @@ async fn run_quick(
                 } => {
                     match line {
                         Some(line) => {
-                            tracing::debug!(target: "wm::ext::cloudflared", project = %route.project, %line, "quick tunnel");
+                            tracing::debug!(target: "wm::ext::cloudflared", project = %route.project, line = %super::logs::sanitize(&line), "quick tunnel");
                             if let Some(url) = extract_quick_tunnel_url(&line) {
                                 set_route(
                                     &live,
@@ -311,6 +315,7 @@ async fn run_quick(
             notify.try_send(()).ok();
             return;
         }
+        process.finish_output().await;
         let exit = exit.unwrap_or_else(|| Err(std::io::Error::other("processo sem status")));
         let code = match &exit {
             Ok(status) => status
@@ -346,6 +351,7 @@ async fn run_named(
     live: Arc<Mutex<Live>>,
     notify: mpsc::Sender<()>,
     cancel: CancellationToken,
+    logs: LogSink,
 ) {
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -373,7 +379,7 @@ async fn run_named(
             config_path.to_string_lossy().as_ref(),
             "run",
         ]);
-        let mut process = match ManagedProcess::spawn(&spec) {
+        let mut process = match ManagedProcess::spawn_logged(&spec, Some(logs.clone()), "cloudflared.") {
             Ok(process) => process,
             Err(err) => {
                 for route in &routes {
@@ -420,7 +426,7 @@ async fn run_named(
                 } => {
                     match line {
                         Some(line) => {
-                            tracing::debug!(target: "wm::ext::cloudflared", %line, "named tunnel");
+                            tracing::debug!(target: "wm::ext::cloudflared", line = %super::logs::sanitize(&line), "named tunnel");
                             if line.to_ascii_lowercase().contains("registered tunnel connection") {
                                 for route in &routes {
                                     let hostname = route.hostname.clone().unwrap_or_default();
@@ -459,6 +465,7 @@ async fn run_named(
             notify.try_send(()).ok();
             return;
         }
+        process.finish_output().await;
         let exit = exit.unwrap_or_else(|| Err(std::io::Error::other("processo sem status")));
         let code = match &exit {
             Ok(status) => status

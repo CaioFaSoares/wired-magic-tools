@@ -33,6 +33,7 @@ pub(crate) async fn serve(
     snapshot: Arc<RwLock<AgentSnapshot>>,
     cmd_tx: mpsc::Sender<Cmd>,
     extension_status: watch::Receiver<Vec<ExtensionStatus>>,
+    extension_logs: crate::extensions::logs::ExtensionLogs,
     control: ControlClient,
     token: String,
     state_path: PathBuf,
@@ -70,8 +71,9 @@ pub(crate) async fn serve(
         let cmd_tx = cmd_tx.clone();
         let extension_status = extension_status.clone();
         let control = control.clone();
+        let extension_logs = extension_logs.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle(stream, snapshot, cmd_tx, extension_status, control).await {
+            if let Err(err) = handle(stream, snapshot, cmd_tx, extension_status, extension_logs, control).await {
                 tracing::debug!(%err, "conexão da API local encerrada");
             }
         });
@@ -83,6 +85,7 @@ async fn handle(
     snapshot: Arc<RwLock<AgentSnapshot>>,
     cmd_tx: mpsc::Sender<Cmd>,
     extension_status: watch::Receiver<Vec<ExtensionStatus>>,
+    extension_logs: crate::extensions::logs::ExtensionLogs,
     control: Arc<LocalControl>,
 ) -> anyhow::Result<()> {
     let (read, mut write) = stream.into_split();
@@ -100,6 +103,7 @@ async fn handle(
                     &snapshot,
                     &cmd_tx,
                     &extension_status,
+                    &extension_logs,
                     &control,
                 )
                 .await
@@ -124,6 +128,7 @@ async fn dispatch(
     snapshot: &Arc<RwLock<AgentSnapshot>>,
     cmd_tx: &mpsc::Sender<Cmd>,
     extension_status: &watch::Receiver<Vec<ExtensionStatus>>,
+    extension_logs: &crate::extensions::logs::ExtensionLogs,
     control: &LocalControl,
 ) -> Result<Value, String> {
     match method {
@@ -136,6 +141,17 @@ async fn dispatch(
                 let _ = tx.send(Cmd::Shutdown).await;
             });
             Ok(json!({"stopping": true}))
+        }
+        wm_ext::CONTEXT_METHOD => {
+            let snap = snapshot.read().await;
+            let context = wm_ext::ExtensionContext {
+                api_version: wm_ext::CONTEXT_API_VERSION,
+                host: snap.status.clone(),
+                nodes: snap.peers.clone(),
+                shares: snap.shares.clone(),
+                extensions: extension_status.borrow().clone(),
+            };
+            serde_json::to_value(context).map_err(|e| e.to_string())
         }
         "status" => {
             let snap = snapshot.read().await;
@@ -388,6 +404,7 @@ async fn dispatch(
                 Err(_) => Err("timeout ao reconectar".into()),
             }
         }
+        "extension_logs" => extension_logs.read(params),
         "extensions" => Ok(serde_json::to_value(&*extension_status.borrow())
             .map_err(|err| err.to_string())?),
         "extension" => {

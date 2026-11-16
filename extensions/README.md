@@ -1,5 +1,11 @@
 # Extensões do wired-magic
 
+A arquitetura de autoria passa a ser **core → CLI → TUI → GUI opcional**.
+Veja o [contrato core-first](../docs/extensions-core-first.md) para organização
+por domínio, comandos não interativos, preferências e API host/nós/servidores.
+Os IDs e pacotes `_gui` abaixo são mantidos por compatibilidade de implantação;
+a lógica de domínio de chat/debug não depende mais dos handlers HTTP.
+
 Esta pasta é a fonte de verdade das extensões embutidas, separadas por
 **visibilidade** e por **interface**:
 

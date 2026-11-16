@@ -18,8 +18,15 @@ node_driver = "none"
 ui = "generic"
 default_active = false
 
-# Aba própria na TUI principal. Ao ativar/abrir a aba, o `wm tui` suspende a
-# interface e executa `wm chat` no terminal; ao sair, volta para a TUI.
+[components]
+core = true
+cli = true
+tui = true
+gui = false
+regions = ["local", "server"]
+server_extension = "chat_gui"
+
+# Aba embutida na TUI principal, sem suspender a interface do WM.
 [tui]
 tab = "Chat"
 # TUI embutida via PTY: a extensão implementa a própria interface (aqui,

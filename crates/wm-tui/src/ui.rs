@@ -306,7 +306,7 @@ fn action_bar_specs(app: &App) -> Vec<ButtonSpec> {
         TAB_EXTENSIONS => {
             if let Some(view) = app.selected_extension() {
                 if app.catalog_focus {
-                    specs.push(button("Ativar/Abrir", MouseAction::ToggleExtension));
+                    specs.push(button("Abrir", MouseAction::ToggleExtension));
                 } else {
                     specs.push(button(
                         if view.active { "Desativar" } else { "Ativar" },
@@ -314,8 +314,10 @@ fn action_bar_specs(app: &App) -> Vec<ButtonSpec> {
                     ));
                 }
             } else if app.selected_catalog().is_some() {
-                specs.push(button("Ativar/Abrir", MouseAction::ToggleExtension));
+                specs.push(button("Abrir", MouseAction::ToggleExtension));
             }
+            specs.push(button("Settings", MouseAction::EditExtension));
+            specs.push(button("Logs", MouseAction::ExtensionLogs));
             specs.push(button("Painel", MouseAction::OpenExtensionsPanel));
             specs.push(button("GUI local", MouseAction::OpenGui));
         }
@@ -1288,34 +1290,23 @@ fn draw_agent(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
-    let local_height = if area.height >= 30 { 8 } else { 5 };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(4),
-            Constraint::Length(local_height),
-        ])
-        .split(area);
-
-    let live = if app.live {
-        Line::from(vec![
-            Span::styled("● ", Style::default().fg(Color::Green)),
-            Span::raw("catálogo do control via agente · "),
-            Span::styled("h/l alterna catálogo · Enter/t ativa/abre", Style::default().fg(Color::Cyan)),
-            Span::raw(" · catálogo local abaixo · p painel · g GUI local"),
-        ])
-    } else {
-        Line::from(Span::styled(
-            "sem agente: use h/l e Enter/t no catálogo local; ative o agente para o control",
-            Style::default().fg(Color::Yellow),
-        ))
-    };
-    frame.render_widget(
-        Paragraph::new(live).block(block(" Extensões deste nó ")),
-        chunks[0],
-    );
-
+    let chunks = Layout::default().direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(4)]).split(area);
+    let names = ["Servidor", "Locais", "Descoberta", "Settings"];
+    let tabs = ratatui::widgets::Tabs::new(names.to_vec()).select(app.extension_section)
+        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .block(block(" Extensões deste nó · h/l seções · e settings · L logs "));
+    frame.render_widget(tabs, chunks[0]);
+    let mut x = chunks[0].x + 1;
+    for (index, name) in names.iter().enumerate() {
+        let width = name.len() as u16 + 3;
+        app.hits.push(crate::app::HitRegion { rect: Rect::new(x, chunks[0].y + 1, width, 1), action: MouseAction::ExtensionSection(index) });
+        x += width;
+    }
+    if app.extension_section != 0 {
+        draw_local_catalog(frame, chunks[1], app);
+        return;
+    }
     let header = Row::new(vec!["Extensão", "Driver", "Ativa", "Estado", "Mensagem / URL"])
         .style(
             Style::default()
@@ -1429,7 +1420,7 @@ fn draw_extensions(frame: &mut Frame, area: Rect, app: &mut App) {
         );
     }
 
-    draw_local_catalog(frame, chunks[2], app);
+
 }
 
 fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -1440,7 +1431,7 @@ fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         );
     let rows: Vec<Row> = app
-        .local_catalog
+        .active_catalog()
         .iter()
         .map(|entry| {
             let status_color = match entry.status.as_str() {
@@ -1449,13 +1440,14 @@ fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &mut App) {
                 "ok" | "conhecida" => Color::DarkGray,
                 _ => Color::Gray,
             };
+            let prefs = app.extension_preferences.extensions.get(&entry.id);
             let label = if entry.name == entry.id {
                 entry.id.clone()
             } else {
                 format!("{} ({})", entry.name, entry.id)
             };
             Row::new(vec![
-                Cell::from(truncate(&label, 30)),
+                Cell::from(truncate(&format!("{}{} {}", if prefs.is_some_and(|p| p.favorite) { "★" } else { "" }, if prefs.is_some_and(|p| p.autoload) { "↻" } else { "" }, label), 30)),
                 Cell::from(entry.version.clone()),
                 Cell::from(entry.visibility.clone()),
                 Cell::from(entry.driver.clone()),
@@ -1468,7 +1460,8 @@ fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &mut App) {
         })
         .collect();
 
-    let title = match &app.catalog_error {
+    let error = if app.extension_section == 2 { &app.discovery_error } else { &app.catalog_error };
+    let title = match error {
         Some(err) => format!(
             " Catálogo local (aviso: {}){} ",
             truncate(err, 60),
@@ -1476,10 +1469,13 @@ fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &mut App) {
         ),
         None => format!(
             " Catálogo local ({} em <data_dir>/extensions){} ",
-            app.local_catalog.len(),
+            app.active_catalog().len(),
             if app.catalog_focus { " · foco" } else { "" }
         ),
     };
+    let title = if app.extension_section == 2 { format!(" Descoberta real · root/extensions + cwd/extensions · r atualizar · {title}") }
+        else if app.extension_section == 3 { " Settings · selecione extensão + Enter/e · favorito/autoload/opções TUI ".into() }
+        else { title };
     let table = Table::new(
         rows,
         [
@@ -1497,10 +1493,10 @@ fn draw_local_catalog(frame: &mut Frame, area: Rect, app: &mut App) {
     .block(block(title));
     frame.render_stateful_widget(table, area, &mut app.catalog_table);
     let offset = app.catalog_table.offset();
-    let total = app.local_catalog.len();
+    let total = app.active_catalog().len();
     register_table_rows(app, area, offset, total, MouseAction::SelectCatalog);
 
-    if app.local_catalog.is_empty() {
+    if app.active_catalog().is_empty() {
         empty_message(
             frame,
             area,
@@ -1953,7 +1949,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         TAB_SHARES => " n publicar · Enter abrir · c copiar · r renomear · e on/off · d remover",
         TAB_TOPOLOGY => " Tab abas · ? ajuda · q sair (agente continua)",
         TAB_AGENT => " s iniciar · X parar · R reiniciar · e ajustes · l log · i serviço",
-        TAB_EXTENSIONS => " h control · l local · j/k · Enter/t ativar/abrir · p painel · g GUI · ? ajuda",
+        TAB_EXTENSIONS => " h/l seção · j/k · Enter/t abrir/ativar · e settings · L logs · r descobrir",
         TAB_SERVICES => " Enter log · g/G GUI · p painel · x para job · i/u serviço · t status",
         TAB_CONSOLE => " : comando · j/k rolar · PgUp/PgDn · Home/End · c limpar",
         TAB_HELP => " j/k rolar · :comando · q sair (agente continua)",
@@ -2960,7 +2956,7 @@ mod tests {
         let mut app = demo_app("local-catalog-select");
         app.tab = TAB_EXTENSIONS;
         app.local_catalog = crate::catalog::scan(&app.root).entries;
-        app.catalog_focus = true;
+        app.select_extension_section(1);
         app.catalog_table.select(Some(0));
         let text = render(&mut app, 120, 36);
         assert!(text.contains("Catálogo local"));

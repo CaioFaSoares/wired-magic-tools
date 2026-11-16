@@ -8,10 +8,12 @@
 
 mod actions;
 pub mod authorization;
+pub mod remote_admin;
 mod desktop;
 mod agent;
 mod app;
 mod catalog;
+mod extension_ui;
 mod pane;
 mod command;
 mod persist;
@@ -66,6 +68,7 @@ pub struct RunOptions {
 }
 
 /// One poll of the local agent, including the agent's own log tail.
+#[derive(Default)]
 pub struct Snapshot {
     pub status: Option<AgentStatus>,
     pub peers: Vec<PeerStatus>,
@@ -83,10 +86,11 @@ pub enum Msg {
     Update(Snapshot),
     Notify(Level, String),
     Console(Level, String),
+    ExtensionLogs { id: String, result: Result<Value, String> },
     Agent(AgentEvent),
     Job(JobEvent),
-    PaneData { id: String, bytes: Vec<u8> },
-    PaneClosed { id: String },
+    PaneData { id: String, generation: u64, bytes: Vec<u8> },
+    PaneClosed { id: String, generation: u64 },
     Joined(Option<EnrolledNode>),
     CommandFinished {
         pid: u32,
@@ -284,12 +288,23 @@ fn event_loop(
     tx: Sender<Msg>,
 ) -> anyhow::Result<()> {
     loop {
+        app.poll_snapshot();
         while let Ok(msg) = rx.try_recv() {
             handle_msg(app, msg, &tx);
         }
         if app.quit {
             break;
         }
+        let saved_tab = app.tab;
+        let autoload = app.autoload_tabs();
+        for (i, id, mode) in autoload {
+            if mode == TuiMode::Snapshot && app.snapshot_rx.is_some() { continue; }
+            app.tab = crate::app::TABS.len() + i;
+            if mode == TuiMode::Snapshot { app.load_extension_tab(app.tab); }
+            else if let Ok(size) = terminal.size() { ensure_pane(app, &tx, size.height.saturating_sub(7), size.width); }
+            app.autoloaded.insert(id);
+        }
+        app.tab = saved_tab;
         if let Some(tab) = app.selected_extension_tab() {
             if tab.spec.mode == TuiMode::Snapshot {
                 let due = tab
@@ -299,6 +314,25 @@ fn event_loop(
                     let index = app.tab;
                     app.load_extension_tab(index);
                 }
+            }
+        }
+        if std::mem::take(&mut app.pending_remote_admin) {
+            screen.restore();
+            let _ = terminal.show_cursor();
+            let result = remote_admin::run_with_tick(None, || {
+                app.poll_snapshot();
+                for _ in 0..256 {
+                    let Ok(msg) = rx.try_recv() else { break; };
+                    handle_msg(app, msg, &tx);
+                }
+            });
+            match Screen::enter(screen.mouse) {
+                Ok(next) => *screen = next,
+                Err(error) => return Err(error),
+            }
+            terminal.clear()?;
+            if result.is_err() {
+                app.notify(Level::Error, "não foi possível abrir o painel administrativo remoto");
             }
         }
         if let Some(id) = app.pending_tui_exec.take() {
@@ -359,6 +393,9 @@ fn ensure_pane(app: &mut App, tx: &Sender<Msg>, rows: u16, cols: u16) {
     env.insert("WM_EXTENSION_ID".into(), id.clone());
     env.insert("WM_DATA_DIR".into(), app.root.display().to_string());
     env.insert("WM_TUI".into(), "1".into());
+    env.insert("WM_API_SOCKET".into(), app.socket.display().to_string());
+    env.insert("WM_API_VERSION".into(), "1".into());
+    env.insert("WM_CONTEXT_METHOD".into(), wm_ext::CONTEXT_METHOD.into());
     env.insert("WM_TUI_PANE".into(), "1".into());
     match crate::pane::Pane::start(
         id.clone(),
@@ -386,10 +423,9 @@ fn resolve_tui_command(
 ) -> (String, Vec<String>, Option<std::path::PathBuf>) {
     let extension_dir = app
         .local_catalog
-        .iter()
-        .find(|entry| entry.id == tab.id)
+        .iter().chain(app.discovery_catalog.iter())
+        .find(|entry| entry.id == tab.id && entry.path != "<embutida>")
         .map(|entry| entry.path.as_str())
-        .filter(|path| *path != "<embutida>")
         .map(|path| app.root.join("extensions").join(path));
     let expand = |value: &str| {
         let mut value = value
@@ -525,47 +561,20 @@ fn run_extension_exec(
     if tab.spec.mode != TuiMode::Exec {
         return;
     }
-    let extension_dir = app
-        .local_catalog
-        .iter()
-        .find(|entry| entry.id == id)
-        .map(|entry| entry.path.as_str())
-        .filter(|path| *path != "<embutida>")
-        .map(|path| app.root.join("extensions").join(path));
-    let command = tab
-        .spec
-        .command
-        .replace("{wm}", &app.exe.display().to_string())
-        .replace(
-            "{extension_dir}",
-            &extension_dir
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-        );
-    let args: Vec<String> = tab
-        .spec
-        .args
-        .iter()
-        .map(|arg| {
-            arg.replace("{wm}", &app.exe.display().to_string())
-                .replace(
-                    "{extension_dir}",
-                    &extension_dir
-                        .as_ref()
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_default(),
-                )
-        })
-        .collect();
+    let (command, args, cwd) = resolve_tui_command(app, &tab);
 
     screen.restore();
     let _ = terminal.show_cursor();
-    let result = std::process::Command::new(&command)
+    let mut process = std::process::Command::new(&command);
+    if let Some(cwd) = cwd { process.current_dir(cwd); }
+    let result = process
         .args(&args)
         .env("WM_EXTENSION_ID", id)
         .env("WM_DATA_DIR", &app.root)
         .env("WM_TUI", "1")
+        .env("WM_API_SOCKET", &app.socket)
+        .env("WM_API_VERSION", "1")
+        .env("WM_CONTEXT_METHOD", wm_ext::CONTEXT_METHOD)
         .status();
     match Screen::enter(screen.mouse) {
         Ok(next) => *screen = next,
@@ -718,15 +727,16 @@ fn handle_msg(app: &mut App, msg: Msg, tx: &Sender<Msg>) {
         }
         Msg::Notify(level, text) => app.notify(level, text),
         Msg::Console(level, text) => app.push_console(level, text),
+        Msg::ExtensionLogs { id, result } => app.finish_extension_logs(&id, result),
         Msg::Agent(event) => handle_agent_event(app, event, tx),
         Msg::Job(event) => handle_job_event(app, event),
-        Msg::PaneData { id, bytes } => {
-            if let Some(pane) = app.panes.get_mut(&id) {
+        Msg::PaneData { id, generation, bytes } => {
+            if let Some(pane) = app.panes.get_mut(&id).filter(|pane| pane.generation == generation) {
                 pane.feed(&bytes);
             }
         }
-        Msg::PaneClosed { id } => {
-            if let Some(pane) = app.panes.get_mut(&id) {
+        Msg::PaneClosed { id, generation } => {
+            if let Some(pane) = app.panes.get_mut(&id).filter(|pane| pane.generation == generation) {
                 pane.exited = true;
                 if pane.exit.is_none() {
                     pane.exit = Some("encerrado".into());
@@ -966,7 +976,8 @@ fn menu_items(app: &App) -> Vec<MenuItem> {
         menu_item("Iniciar serve local (control apenas)…", A::StartServe),
         menu_item("Abrir GUI local", A::OpenGui),
         menu_item("Fechar GUI local", A::CloseGui),
-        menu_item("Abrir painel admin", A::AdminPanel),
+        menu_item("Administrar servidor remoto (TUI)…", A::RemoteAdmin),
+        menu_item("Abrir painel admin (web)", A::AdminPanel),
         menu_item("Publicar share…", A::NewShare),
         menu_item("Abrir share selecionado", A::OpenShare),
         menu_item("Copiar endereço do share", A::CopyShare),
@@ -1157,6 +1168,7 @@ fn mouse_scroll(app: &mut App, up: bool, column: u16, row: u16) {
 }
 
 fn toggle_selected_extension(app: &mut App, tx: &Sender<Msg>) {
+    if app.extension_section == 3 { app.edit_extension_settings(); return; }
     if app.catalog_focus {
         if let Some(entry) = app.selected_catalog().cloned() {
             // 1. Extensões com aba TUI abrem a aba (chat/debug etc.).
@@ -1165,25 +1177,11 @@ fn toggle_selected_extension(app: &mut App, tx: &Sender<Msg>) {
                 app.delete_armed = None;
                 return;
             }
-            // 2. Se o control já conhece a extensão, ativa/desativa o nó.
-            if let Some(view) = app
-                .extension_catalog
-                .iter()
-                .find(|view| view.id == entry.id)
-                .cloned()
-            {
-                actions::toggle_extension(app, &view, tx);
-                return;
-            }
-            app.notify(
-                Level::Warn,
-                format!(
-                    "'{}' está no catálogo local, mas não no do control; recarregue os manifestos no painel ou use wm extensions enable",
-                    entry.id
-                ),
-            );
+            app.notify(Level::Info, "extensão local sem TUI; serviços são controlados na seção Servidor");
             return;
+
         }
+        return;
     }
     if let Some(view) = app.selected_extension().cloned() {
         actions::toggle_extension(app, &view, tx);
@@ -1268,10 +1266,13 @@ fn execute_mouse(app: &mut App, action: MouseAction, tx: &Sender<Msg>) {
             app.extensions_table.select(Some(index));
             app.catalog_focus = false;
         }
-        A::SelectCatalog(index) if index < app.local_catalog.len() => {
+        A::SelectCatalog(index) if index < app.active_catalog().len() => {
             app.catalog_table.select(Some(index));
             app.catalog_focus = true;
         }
+        A::EditExtension => app.edit_extension_settings(),
+        A::ExtensionLogs => app.extension_logs(tx),
+        A::ExtensionSection(section) => app.select_extension_section(section),
         A::ToggleExtension => toggle_selected_extension(app, tx),
         A::OpenExtensionsPanel => actions::open_extensions_panel(app),
         A::SelectProfile(_)
@@ -1308,6 +1309,7 @@ fn execute_mouse(app: &mut App, action: MouseAction, tx: &Sender<Msg>) {
         A::OpenGui => actions::open_gui(app, tx),
         A::CloseGui => actions::confirm_stop_gui(app),
         A::AdminPanel => actions::open_admin_panel(app),
+        A::RemoteAdmin => app.pending_remote_admin = true,
         A::StartHost => actions::confirm_start_host(app),
         A::StartServe => actions::confirm_start_serve(app),
         A::StopSelectedJob => actions::confirm_stop_selected_job(app),
@@ -1556,23 +1558,12 @@ fn handle_tab_action(app: &mut App, key: KeyEvent, tx: &Sender<Msg>) {
             _ => {}
         },
         TAB_EXTENSIONS => match key.code {
-            KeyCode::Char('h') => {
-                app.catalog_focus = false;
-                if app.extensions_table.selected().is_none() && !app.extension_catalog.is_empty() {
-                    app.extensions_table.select(Some(0));
-                }
-            }
-            KeyCode::Char('l') => {
-                app.catalog_focus = true;
-                if app.catalog_table.selected().is_none() && !app.local_catalog.is_empty() {
-                    app.catalog_table.select(Some(0));
-                }
-            }
-            KeyCode::Char('t') | KeyCode::Char(' ') => {
-                if let Some(view) = app.selected_extension().cloned() {
-                    actions::toggle_extension(app, &view, tx);
-                }
-            }
+            KeyCode::Char('h') => app.select_extension_section((app.extension_section + 3) % 4),
+            KeyCode::Char('l') => app.select_extension_section((app.extension_section + 1) % 4),
+            KeyCode::Char('t') | KeyCode::Char(' ') => toggle_selected_extension(app, tx),
+            KeyCode::Char('e') => app.edit_extension_settings(),
+            KeyCode::Char('L') => app.extension_logs(tx),
+            KeyCode::Char('r') if app.extension_section == 2 => app.discover_extensions(),
             KeyCode::Char('p') => actions::open_extensions_panel(app),
             KeyCode::Char('g') => actions::open_gui(app, tx),
             KeyCode::Char('d') => actions::run_doctor(app, tx),
@@ -1643,8 +1634,9 @@ fn navigate(app: &mut App, down: bool) {
             app.delete_armed = None;
         }
         TAB_EXTENSIONS => {
-            if app.catalog_focus && !app.local_catalog.is_empty() {
-                select(&mut app.catalog_table, app.local_catalog.len(), down, 1);
+            if app.catalog_focus {
+                let len = app.active_catalog().len();
+                select(&mut app.catalog_table, len, down, 1);
             } else {
                 select(&mut app.extensions_table, app.extension_catalog.len(), down, 1);
             }
@@ -1671,8 +1663,9 @@ fn navigate_by(app: &mut App, delta: isize) {
             app.delete_armed = None;
         }
         TAB_EXTENSIONS => {
-            if app.catalog_focus && !app.local_catalog.is_empty() {
-                select_step(&mut app.catalog_table, app.local_catalog.len(), delta);
+            if app.catalog_focus {
+                let len = app.active_catalog().len();
+                select_step(&mut app.catalog_table, len, delta);
             } else {
                 select_step(&mut app.extensions_table, app.extension_catalog.len(), delta);
             }
@@ -1993,6 +1986,49 @@ mod tests {
         for ch in text.chars() {
             press(app, KeyCode::Char(ch), tx);
         }
+    }
+
+    #[test]
+    fn pane_events_ignore_replaced_process_generations() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = App::load(root.path().into());
+        let (tx, _rx) = sender();
+        let id = "chat".to_string();
+        app.panes.insert(id.clone(), pane::Pane::test_fixture(1));
+        // Settings replace the process under the same extension identity.
+        app.panes.insert(id.clone(), pane::Pane::test_fixture(2));
+        handle_msg(&mut app, Msg::PaneData {
+            id: id.clone(), generation: 1, bytes: b"stale".to_vec(),
+        }, &tx);
+        handle_msg(&mut app, Msg::PaneClosed { id: id.clone(), generation: 1 }, &tx);
+        let current = &app.panes[&id];
+        assert!(current.parser.screen().contents().is_empty());
+        assert!(!current.exited);
+        assert!(current.exit.is_none());
+        handle_msg(&mut app, Msg::PaneData {
+            id: id.clone(), generation: 2, bytes: b"current".to_vec(),
+        }, &tx);
+        assert_eq!(app.panes[&id].parser.screen().contents(), "current");
+        handle_msg(&mut app, Msg::PaneClosed { id: id.clone(), generation: 2 }, &tx);
+        assert!(app.panes[&id].exited);
+        assert_eq!(app.panes[&id].exit.as_deref(), Some("encerrado"));
+        app.panes.remove(&id);
+        // A late close after removing the tab is harmless too.
+        handle_msg(&mut app, Msg::PaneClosed { id, generation: 2 }, &tx);
+        assert!(app.panes.is_empty());
+    }
+
+    #[test]
+    fn remote_admin_menu_only_requests_a_separate_console() {
+        let root = temp_root("remote-admin-menu");
+        let mut app = App::load(root.clone());
+        let (tx, rx) = sender();
+        assert!(menu_items(&app).iter().any(|item| item.action == MouseAction::RemoteAdmin));
+        execute_mouse(&mut app, MouseAction::RemoteAdmin, &tx);
+        assert!(app.pending_remote_admin);
+        assert!(!app.quit);
+        assert!(app.pending_tui_exec.is_none());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

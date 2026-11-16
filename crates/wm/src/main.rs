@@ -17,12 +17,14 @@ use wm_proto::{
     ShareKind, ShareProtocol, decode_connect_code, decode_join_target, encode_connect_code,
 };
 
+mod admin;
 mod chat;
 mod chat_tui;
 mod debug;
 mod debug_tui;
 mod desktop;
 mod discovery;
+mod extensions;
 mod gui;
 mod packages;
 mod service;
@@ -42,6 +44,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Administra um servidor remoto com autenticação própria de administrador.
+    Admin(admin::AdminArgs),
     /// Sobe o control plane, o relay/STUN e o nó local em um comando.
     Host(HostArgs),
     /// Sobe apenas o control plane (API + relay + STUN).
@@ -272,6 +276,24 @@ enum ExtensionsAction {
     Enable { id: String },
     /// Desativa a extensão neste nó.
     Disable { id: String },
+    /// Últimos logs em memória desta extensão no agente do perfil atual.
+    Logs {
+        id: String,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u16).range(1..=256))]
+        limit: u16,
+    },
+    /// Lista preferências locais sem depender do agente.
+    Preferences,
+    /// Contexto do host, nós e serviços via API local, sem credenciais.
+    Context,
+    /// Marca como favorita; --off remove dos favoritos.
+    Favorite { id: String, #[arg(long)] off: bool },
+    /// Abre automaticamente a interface na TUI, sem ativar serviços.
+    Autoload { id: String, #[arg(long)] off: bool },
+    /// Define opção de interface não secreta (omita VALUE para remover).
+    Configure { id: String, key: String, value: Option<String> },
+    /// Descobre manifestos sem instalar nem executar código.
+    Discover(DiscoverArgs),
 }
 
 #[derive(clap::Args)]
@@ -286,6 +308,22 @@ struct ChatTuiArgs {
     /// Nome exibido nas mensagens.
     #[arg(long, env = "WM_CHAT_AUTHOR")]
     author: Option<String>,
+    #[command(subcommand)]
+    action: Option<ChatAction>,
+}
+
+#[derive(Subcommand)]
+enum ChatAction {
+    /// Consulta metadados da sala em JSON sem abrir a TUI.
+    Info,
+    /// Lista mensagens em JSON.
+    List { #[arg(long, default_value_t = 0)] after: u64 },
+    /// Envia uma mensagem e imprime o resultado em JSON.
+    Send { text: String },
+    /// Abre explicitamente a interface de terminal.
+    Tui,
+    /// Inicia o servidor de sala (a GUI é uma interface opcional deste core).
+    Serve(ChatGuiArgs),
 }
 
 #[derive(clap::Args)]
@@ -322,6 +360,10 @@ struct DebugGuiArgs {
 
 #[derive(clap::Subcommand)]
 enum DebugAction {
+    /// Coleta métricas locais em JSON sem abrir uma interface.
+    Snapshot,
+    /// Abre explicitamente a interface de terminal.
+    Tui,
     /// Descobre extensões locais e mostra o que é nova/atualizada.
     Discover(DiscoverArgs),
 }
@@ -416,6 +458,7 @@ fn data_root(cli: &Cli) -> PathBuf {
 async fn run(cli: Cli) -> anyhow::Result<()> {
     let root = data_root(&cli);
     match cli.command {
+        Command::Admin(args) => admin::run(args).await,
         Command::Host(args) => run_host(args, root).await,
         Command::Serve(args) => run_serve(args, root).await,
         Command::Join(args) => run_join(args, root).await,
@@ -440,10 +483,21 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Gui(args) => gui::run(root, args.listen, !args.no_open).await,
         Command::Extensions { json, action } => run_extensions(&root, json, action).await,
         Command::Packages(args) => packages::run(&root, args.action),
-        Command::Chat(args) => tokio::task::spawn_blocking(move || {
-            chat_tui::run(args.url, args.author)
-        })
-        .await?,
+        Command::Chat(args) => match args.action {
+            None | Some(ChatAction::Tui) => tokio::task::spawn_blocking(move || chat_tui::run(args.url, args.author)).await?,
+            Some(ChatAction::Serve(server)) => chat::run(server.listen, server.title, server.node).await,
+            Some(action) => {
+                let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
+                let value = match action {
+                    ChatAction::Info => serde_json::to_value(extensions::chat::cli::info(&client, &args.url).await?)?,
+                    ChatAction::List { after } => serde_json::to_value(extensions::chat::cli::list(&client, &args.url, after).await?)?,
+                    ChatAction::Send { text } => serde_json::to_value(extensions::chat::cli::send(&client, &args.url, args.author.as_deref(), &text).await?)?,
+                    _ => unreachable!(),
+                };
+                println!("{}", serde_json::to_string_pretty(&value)?);
+                Ok(())
+            }
+        },
         Command::ChatGui(args) => chat::run(args.listen, args.title, args.node).await,
         Command::Debug(args) => match args.action {
             Some(DebugAction::Discover(discover)) => discovery::discover_cli(
@@ -453,7 +507,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 discover.no_state,
                 discover.window_hours,
             ),
-            None => tokio::task::spawn_blocking(move || debug_tui::run(&root)).await?,
+            Some(DebugAction::Snapshot) => {
+                let output = tokio::task::spawn_blocking(move || extensions::debug::cli::snapshot_json(&root, true)).await??;
+                println!("{output}");
+                Ok(())
+            }
+            None | Some(DebugAction::Tui) => tokio::task::spawn_blocking(move || debug_tui::run(&root)).await?,
         },
         Command::DebugGui(args) => debug::run(root, args.listen, args.title, args.node).await,
         Command::Tui(args) => run_tui(&root, args).await,
@@ -1060,6 +1119,36 @@ async fn run_extensions(
     action: Option<ExtensionsAction>,
 ) -> anyhow::Result<()> {
     match action {
+        Some(ExtensionsAction::Discover(args)) => discovery::discover_cli(root, args.dirs, as_json || args.json, args.no_state, args.window_hours)?,
+        Some(ExtensionsAction::Context) => run_local(root, wm_ext::CONTEXT_METHOD, Value::Null).await?,
+        Some(ExtensionsAction::Logs { id, limit }) => {
+            if !wm_ext::valid_id(&id) { bail!("id de extensão inválido: {id}"); }
+            run_local(root, "extension_logs", json!({"id": id, "limit": limit})).await?;
+        },
+        Some(ExtensionsAction::Preferences) => {
+            let store = wm_ext::ExtensionPreferencesStore::load(root).map_err(anyhow::Error::msg)?;
+            println!("{}", serde_json::to_string_pretty(&store)?);
+        }
+        Some(action @ (ExtensionsAction::Favorite { .. } | ExtensionsAction::Autoload { .. } | ExtensionsAction::Configure { .. })) => {
+            let mut store = wm_ext::ExtensionPreferencesStore::load(root).map_err(anyhow::Error::msg)?;
+            let id = match &action {
+                ExtensionsAction::Favorite { id, .. } | ExtensionsAction::Autoload { id, .. } | ExtensionsAction::Configure { id, .. } => id.clone(),
+                _ => unreachable!(),
+            };
+            if !wm_ext::valid_id(&id) { bail!("id de extensão inválido: {id}"); }
+            let prefs = store.extensions.entry(id.clone()).or_default();
+            match action {
+                ExtensionsAction::Favorite { off, .. } => prefs.favorite = !off,
+                ExtensionsAction::Autoload { off, .. } => prefs.autoload = !off,
+                ExtensionsAction::Configure { key, value, .. } => {
+                    if let Some(value) = value { prefs.options.insert(key, value); }
+                    else { prefs.options.remove(&key); }
+                }
+                _ => unreachable!(),
+            }
+            store.save(root).map_err(anyhow::Error::msg)?;
+            println!("{}", serde_json::to_string_pretty(&store.extensions[&id])?);
+        }
         Some(ExtensionsAction::Enable { id }) => {
             let value = local_call(
                 root,

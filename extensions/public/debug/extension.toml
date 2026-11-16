@@ -18,6 +18,13 @@ node_driver = "none"
 ui = "generic"
 default_active = false
 
+[components]
+core = true
+cli = true
+tui = true
+gui = false
+regions = ["local"]
+
 # Aba própria na TUI principal: executa o dashboard local `wm debug`.
 [tui]
 tab = "Debug"

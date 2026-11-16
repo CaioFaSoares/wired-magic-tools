@@ -18,6 +18,7 @@ pub(crate) mod cloudflared;
 pub(crate) mod exec;
 pub(crate) mod hooks;
 mod process;
+pub(crate) mod logs;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -37,11 +38,15 @@ use self::hooks::HookContext;
 #[derive(Clone)]
 pub(crate) struct Reporter {
     inner: Arc<Mutex<ExtensionStatus>>,
+    pub(crate) logs: logs::LogSink,
 }
 
 impl Reporter {
-    fn new(desired: &ExtensionDesired) -> Self {
+    fn new(desired: &ExtensionDesired, logs: &logs::ExtensionLogs) -> Self {
+        let sink = logs.sink(&desired.id);
+        sink.record("lifecycle", "starting extension");
         Self {
+            logs: sink,
             inner: Arc::new(Mutex::new(ExtensionStatus {
                 id: desired.id.clone(),
                 name: desired.name.clone(),
@@ -57,7 +62,9 @@ impl Reporter {
 
     pub(crate) fn update(&self, f: impl FnOnce(&mut ExtensionStatus)) {
         if let Ok(mut status) = self.inner.lock() {
+            let previous = status.state.clone();
             f(&mut status);
+            if status.state != previous { self.logs.record("lifecycle", &format!("state: {:?}", status.state)); }
             status.updated_at = Utc::now();
         }
     }
@@ -68,6 +75,7 @@ impl Reporter {
             if status.state == state && status.message.as_deref() == Some(message.as_str()) {
                 return;
             }
+            self.logs.record("lifecycle", &format!("state: {state:?}"));
             status.state = state;
             status.message = Some(message);
             status.updated_at = Utc::now();
@@ -92,6 +100,7 @@ impl Reporter {
             {
                 return;
             }
+            self.logs.record("lifecycle", &format!("state: {state:?}"));
             status.state = state;
             status.message = message;
             status.public_urls = public_urls;
@@ -139,10 +148,20 @@ impl Drop for Handle {
 /// Long-running reconciliation loop. It never returns on its own; the agent
 /// aborts it on shutdown, and dropping the handles terminates the sidecars.
 pub async fn run(
+    desired_rx: watch::Receiver<Vec<ExtensionDesired>>,
+    status_tx: watch::Sender<Vec<ExtensionStatus>>,
+    work_dir: PathBuf,
+    ctx: HookContext,
+) {
+    run_with_logs(desired_rx, status_tx, work_dir, ctx, logs::ExtensionLogs::default()).await;
+}
+
+pub(crate) async fn run_with_logs(
     mut desired_rx: watch::Receiver<Vec<ExtensionDesired>>,
     status_tx: watch::Sender<Vec<ExtensionStatus>>,
     work_dir: PathBuf,
     ctx: HookContext,
+    logs: logs::ExtensionLogs,
 ) {
     let mut handles: HashMap<String, Handle> = HashMap::new();
     let mut locks: HashMap<String, Arc<TokioMutex<()>>> = HashMap::new();
@@ -151,7 +170,7 @@ pub async fn run(
     // The map may already contain desired state when the agent starts (for
     // example after a reconnect). Process the current value before waiting.
     let initial = desired_rx.borrow_and_update().clone();
-    reconcile(&mut handles, &mut locks, initial, &work_dir, &ctx);
+    reconcile(&mut handles, &mut locks, initial, &work_dir, &ctx, &logs);
     publish(&status_tx, &handles);
     loop {
         tokio::select! {
@@ -160,7 +179,7 @@ pub async fn run(
                     break;
                 }
                 let desired = desired_rx.borrow_and_update().clone();
-                reconcile(&mut handles, &mut locks, desired, &work_dir, &ctx);
+                reconcile(&mut handles, &mut locks, desired, &work_dir, &ctx, &logs);
                 publish(&status_tx, &handles);
             }
             _ = tick.tick() => {
@@ -178,10 +197,14 @@ fn reconcile(
     desired: Vec<ExtensionDesired>,
     work_dir: &std::path::Path,
     ctx: &HookContext,
+    logs: &logs::ExtensionLogs,
 ) {
     let keep: std::collections::HashSet<String> =
         desired.iter().map(|d| d.id.clone()).collect();
-    handles.retain(|id, _| keep.contains(id));
+    handles.retain(|id, handle| {
+        if !keep.contains(id) { handle.reporter.logs.record("lifecycle", "extension removed; stopping"); }
+        keep.contains(id)
+    });
 
     for desired in desired {
         // A hook, driver or version change must also restart the instance so
@@ -207,7 +230,7 @@ fn reconcile(
             continue;
         }
         handles.remove(&desired.id);
-        let reporter = Reporter::new(&desired);
+        let reporter = Reporter::new(&desired, logs);
         let cancel = CancellationToken::new();
         let lock = locks
             .entry(desired.id.clone())
@@ -306,7 +329,7 @@ fn spawn_driver(
             }
         }
 
-        hooks::deactivate(&desired, &ctx).await;
+        hooks::deactivate(&desired, &ctx, &reporter).await;
     })
 }
 
@@ -384,11 +407,12 @@ mod tests {
         let (desired_tx, desired_rx) = watch::channel(vec![desired]);
         let (status_tx, mut status_rx) = watch::channel(Vec::new());
         let ctx = hook_ctx(dir.path());
-        let handle = tokio::spawn(run(
+        let handle = tokio::spawn(run_with_logs(
             desired_rx,
             status_tx,
             dir.path().to_path_buf(),
             ctx,
+            logs::ExtensionLogs::default(),
         ));
 
         let statuses = wait_for(&mut status_rx, |s| {
@@ -415,11 +439,12 @@ mod tests {
         let (desired_tx, desired_rx) = watch::channel(vec![desired]);
         let (status_tx, mut status_rx) = watch::channel(Vec::new());
         let ctx = hook_ctx(dir.path());
-        let handle = tokio::spawn(run(
+        let handle = tokio::spawn(run_with_logs(
             desired_rx,
             status_tx,
             dir.path().to_path_buf(),
             ctx,
+            logs::ExtensionLogs::default(),
         ));
 
         let statuses = wait_for(&mut status_rx, |s| {
@@ -474,11 +499,12 @@ mod tests {
         let (status_tx, mut status_rx) = watch::channel(Vec::new());
         let ctx = hook_ctx(dir.path());
         let ext_dir = ctx.extensions_dir.join("hello");
-        let handle = tokio::spawn(run(
+        let handle = tokio::spawn(run_with_logs(
             desired_rx,
             status_tx,
             dir.path().to_path_buf(),
             ctx,
+            logs::ExtensionLogs::default(),
         ));
 
         wait_for(&mut status_rx, |s| {
@@ -499,6 +525,33 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         assert!(ext_dir.join("deactivate.ok").is_file(), "deactivate hook não rodou");
+        handle.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mock_exec_and_hook_logs_survive_exit_and_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut desired = desired_exec("/bin/sh", vec!["-c", "echo exec-out; echo exec-err >&2; echo wmn_do_not_retain"]);
+        desired.hooks.activate = Some(wm_proto::HookSpec {
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo hook-out; echo hook-err >&2; echo --token=do_not_retain".into()],
+            env: Default::default(), timeout_secs: 5, working_dir: None,
+        });
+        let logs = logs::ExtensionLogs::default();
+        let (desired_tx, desired_rx) = watch::channel(vec![desired]);
+        let (status_tx, mut status_rx) = watch::channel(Vec::new());
+        let handle = tokio::spawn(run_with_logs(desired_rx, status_tx, dir.path().into(), hook_ctx(dir.path()), logs.clone()));
+        wait_for(&mut status_rx, |s| s.first().is_some_and(|s| s.state == ExtensionState::Stopped)).await;
+        let entries = logs.read(serde_json::json!({"id":"hello", "limit":500})).unwrap();
+        let text = entries.to_string();
+        for expected in ["exec-out", "exec-err", "hook-out", "hook-err", "exec.stdout", "exec.stderr", "hook.activate.stdout", "hook.activate.stderr", "lifecycle"] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("do_not_retain"));
+        desired_tx.send(Vec::new()).unwrap();
+        wait_for(&mut status_rx, |s| s.is_empty()).await;
+        assert!(logs.read(serde_json::json!({"id":"hello"})).is_ok());
         handle.abort();
     }
 
@@ -537,11 +590,13 @@ mod tests {
         let (desired_tx, desired_rx) = watch::channel(vec![desired]);
         let (status_tx, mut status_rx) = watch::channel(Vec::new());
         let ctx = hook_ctx(dir.path());
-        let handle = tokio::spawn(run(
+        let logs = logs::ExtensionLogs::default();
+        let handle = tokio::spawn(run_with_logs(
             desired_rx,
             status_tx,
             dir.path().to_path_buf(),
             ctx,
+            logs.clone(),
         ));
 
         let statuses = wait_for(&mut status_rx, |s| {
@@ -559,6 +614,8 @@ mod tests {
         );
         let details = statuses[0].details["routes"].as_array().unwrap();
         assert_eq!(details[0]["state"], "running");
+        let entries = logs.read(serde_json::json!({"id":"cloudflared"})).unwrap();
+        assert!(entries["entries"].as_array().unwrap().iter().any(|entry| entry["source"] == "cloudflared.stdout"));
 
         desired_tx.send(Vec::new()).unwrap();
         wait_for(&mut status_rx, |s| s.is_empty()).await;
