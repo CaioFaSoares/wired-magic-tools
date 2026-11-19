@@ -158,3 +158,29 @@ Permanecem para aceite completo do plano:
 - Verificação: `CARGO_HOME="$PWD/.cargo-home" cargo test --workspace --offline` — **214 aprovados,
   2 ignorados**; `pnpm --dir web typecheck` e `pnpm --dir web build` exit 0.
 - Publicação: assets macOS `arm64` e `x86_64`, `SHA256SUMS`, `wired-magic.rb` e fórmula no tap.
+
+## Rodada 8 — release v0.1.8
+
+- Servidor **headless por padrão**: removidos `rust-embed`/`rustls` de assets web e o build
+  Node do fluxo padrão. `cargo build -p wired-magic`, `Dockerfile` e release macOS não
+  exigem `web/dist`.
+- **Setup inicial pela TUI**: credencial bootstrap temporária por
+  `WM_BOOTSTRAP_USERNAME`/`WM_BOOTSTRAP_PASSWORD` (ou `_PASSWORD_FILE`), sessão `wm_setup`
+  de 600 s + CSRF, criação atômica de admin definitivo e usuário cotidiano. A conclusão
+  consome o bootstrap e revoga as sessões temporárias; reiniciar com a mesma env não
+  reabre o setup. Banco novo sem bootstrap falha fechado; `WM_ADMIN_PASSWORD` permanece
+  apenas como seed legado explícito, sem senha gerada/impressa.
+- Contas humanas com roles `admin`/`user`: usuário comum só consulta a própria sessão;
+  rotas administrativas, SSE e ativação de extensões continuam exigindo admin.
+- **Painel React opcional** como extensão de servidor `control_panel`: pacote verificado
+  (schema, hashes, limites, leitura relativa sem symlink), digest confirmado por admin,
+  snapshot imutável em memória, trust marker externo e desativação sem parar o servidor.
+  Rotas `/api`, `/relay`, `/healthz`, `/j` e `/download` continuam reservadas; `/relay-status`
+  é a página de UI que antes ocupava `/relay`.
+- Verificação local: suíte Rust serial **285 aprovados, 2 ignorados**; smoke HTTP real com
+  reinícios em `wm serve` e em `wm host --no-agent` (bootstrap/CSRF/replay, painel
+  instalar→ativar→corromper→restaurar→desativar); typecheck web exit 0; 32 testes Python
+  (empacotador do painel, fórmula, e2e-assert, auditoria).
+- Publicação: assets macOS `arm64` e `x86_64`, `SHA256SUMS`, `wired-magic.rb` e fórmula no tap.
+- Não validado: build Docker/TUN, dataplane real, DOM/navegador, reboot systemd/launchd e
+  medição de CPU/RAM idle.

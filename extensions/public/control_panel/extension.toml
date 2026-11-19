@@ -1,0 +1,12 @@
+# Server-only optional application. Installation never enables it.
+# Built assets are distributed separately under www/ with bundle.json hashes.
+# Runtime activation is /api/v1/extensions/control_panel/runtime, not node activation.
+id = "control_panel"
+name = "Painel de administração (React)"
+version = "0.1.8"
+description = "Painel React opcional do control; instale o pacote de assets e ative no servidor por admin/TUI após bootstrap."
+author = "wired-magic"
+visibility = "public"
+node_driver = "none"
+ui = "generic"
+default_active = false

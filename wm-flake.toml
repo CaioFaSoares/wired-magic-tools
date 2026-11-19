@@ -9,8 +9,8 @@
 # O lockfile registra URL, ref, commit e subdiretório para updates reproduzíveis.
 [flake]
 name = "wired-magic-tools"
-version = "0.1.7"
-description = "Extensões oficiais do wired-magic: chat TUI/GUI, debug TUI/GUI e cloudflared."
+version = "0.1.8"
+description = "Extensões oficiais: chat TUI/GUI, debug TUI/GUI, cloudflared e painel control opcional."
 
 [[package]]
 id = "chat"
@@ -31,3 +31,9 @@ path = "extensions/public/debug_gui"
 [[package]]
 id = "cloudflared"
 path = "extensions/public/cloudflared"
+
+# Source metadata only. Build/download the separate www bundle before runtime
+# activation on the control server; node/package activation does not enable it.
+[[package]]
+id = "control_panel"
+path = "extensions/public/control_panel"

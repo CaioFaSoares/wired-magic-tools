@@ -40,7 +40,7 @@ versionado, compila ACL e assina tokens de relay. O data plane é WireGuard em u
 | TUI | `crates/wm-tui` | console do membro: onboarding, perfis, agente, shares, console, mouse |
 | Extensões | `crates/wm-ext` | contratos, validação de manifesto, cloudflared, driver `exec` |
 | Binário | `crates/wm` | `host`, `serve`, `join`, `up`, `tui`, `gui`, `doctor`, `service` |
-| Painel | `web/` | React + Vite, embutido no binário via `rust-embed` |
+| Painel opcional | `web/` | React + Vite, pacote separado ativado em runtime por admin |
 
 Estrutura do repositório:
 
@@ -48,7 +48,7 @@ Estrutura do repositório:
 crates/wm-proto/    tipos compartilhados
 crates/wm-core/     agente, boringtun, TUN, STUN, relay client, API local
 crates/wm-ext/      manifesto de extensão, cloudflared, drivers
-crates/wm-control/  axum + SQLite, relay/STUN, ACL, painel embutido
+crates/wm-control/  axum + SQLite, relay/STUN, ACL, painel opcional externo
 crates/wm-tui/      TUI Ratatui
 crates/wm/          binário wm
 web/                React + Vite
@@ -211,7 +211,8 @@ HTTP/TLS. Com proxy reverso, use a URL/porta pública do proxy em `--public-url`
 `--listen` é interna. Se houver remapeamento UDP para outra porta pública, anuncie-a com
 `--stun-url stun:mesh.exemplo.com:PORTA` (repetível).
 
-Variáveis úteis: `WM_DATA_DIR`, `WM_PUBLIC_URL`, `WM_ADMIN_PASSWORD` (só no primeiro start),
+Variáveis úteis: `WM_DATA_DIR`, `WM_PUBLIC_URL`, `WM_BOOTSTRAP_USERNAME`,
+`WM_BOOTSTRAP_PASSWORD` (ou `WM_BOOTSTRAP_PASSWORD_FILE`, setup temporário),
 `WM_LISTEN`, `WM_STUN_LISTEN`, `WM_STUN_URLS`, `WM_UDP_PORT`, `WM_LOG`.
 
 ## Instalar e compilar
@@ -223,7 +224,7 @@ brew tap CaioFaSoares/tap
 brew install CaioFaSoares/tap/wired-magic
 ```
 
-A release atual é `v0.1.6`. A TUI instalada pelo Homebrew verifica e instala versões estáveis mais
+A release atual é `v0.1.8`. A TUI instalada pelo Homebrew verifica e instala versões estáveis mais
 novas em segundo plano; a sessão e o agente continuam na versão atual e a nova entra na próxima
 abertura. `WM_NO_AUTO_UPDATE=1` desativa. Fórmulas fixadas com `brew pin` são respeitadas; sob
 `sudo`, a TUI apenas orienta a atualizar como usuário normal (nunca executa Homebrew como root).
@@ -240,26 +241,21 @@ compile.
 Requisitos:
 
 - Rust **1.94+** e um linker C (Xcode Command Line Tools no macOS; `build-essential` no Linux).
-- Node.js **22 LTS** (mínimo 20.19) e **pnpm 10** para o painel.
+- Node.js **22 LTS**, **pnpm 10** e Python 3.11+ somente para empacotar o painel opcional,
+  não para compilar/iniciar o servidor.
 - Linux: `iproute2` em runtime e `systemd` se for instalar o serviço.
 
 ```sh
-# 1. painel (necessário para o painel embutido atualizado)
-cd web
-pnpm install --frozen-lockfile
-pnpm build
-cd ..
+# Servidor headless: sem pré-requisito frontend, um compilador por vez.
+CARGO_BUILD_JOBS=1 cargo build --release --locked -p wired-magic
 
-# 2. binário (rust-embed embute web/dist em tempo de compilação)
-cargo build --release -p wired-magic
-
-# 3. instale antes de instalar o serviço
+# Instale antes de instalar o serviço
 sudo install -m 0755 target/release/wm /usr/local/bin/wm
 wm version
 ```
 
-Se mudar o frontend depois de compilar o Rust, recompile o Rust: o painel é embutido no binário.
-Um build só do CLI pode usar o `web/dist` já presente no repositório.
+Mudanças no frontend não exigem recompilar Rust: distribua e ative outro pacote do
+[painel opcional](docs/control-panel.md). A instalação padrão não copia nem embute `web/dist`.
 
 ### Cross-compile e Docker
 
@@ -305,8 +301,11 @@ sudo wm host \
   --data-dir /var/lib/wired-magic
 ```
 
-Primeiro start imprime a senha do `admin`, um convite rápido `wmc_...`, o comando
-`curl .../j/... | sh` e um convite manual. Anote a senha: só o hash fica no SQLite.
+Antes do primeiro start, configure no ambiente do serviço `WM_BOOTSTRAP_USERNAME`
+e `WM_BOOTSTRAP_PASSWORD` (ou `WM_BOOTSTRAP_PASSWORD_FILE`). Não há senha gerada nos
+logs. A API sobe headless; acesse pela sua TUI com a conta temporária e crie admin
++ usuário cotidiano, consumindo o bootstrap. Só depois o host inscreve o gateway e
+imprime convites. Veja [primeiro acesso](docs/remote-admin.md).
 
 - `--public-url` é a URL que clientes e painel usam; entra nos tokens e nos convites.
 - `--listen 127.0.0.1:8080` deixa o TLS para o Caddy; para TLS direto use
@@ -408,7 +407,7 @@ domínio; o compose publica só as portas UDP que o proxy HTTP não cobre. Pré-
 com Docker rootful, `/dev/net/tun` no host e 443/tcp, 3478/udp e 41641/udp liberadas.
 
 ```sh
-cp .env.example .env      # edite WM_PUBLIC_URL e WM_ADMIN_PASSWORD
+cp .env.example .env      # edite WM_PUBLIC_URL e WM_BOOTSTRAP_USERNAME/PASSWORD
 docker compose up -d --build
 docker compose logs -f wm
 ```
@@ -601,7 +600,9 @@ diferente até você remover a primeira.
 
 ## Painel web, API e integração
 
-O painel é servido na `public-url` do host, junto com a API. Nele você:
+Após instalar e ativar a [extensão opcional](docs/control-panel.md) como admin,
+o painel é servido na `public-url` do host, junto com a API. Por padrão, use a TUI.
+No painel opcional você:
 
 - aprova/revoga nós e vê o estado online e o caminho (direto/relay);
 - cria convites com tags, TTL, limite de usos e `require_approval`;
@@ -611,8 +612,10 @@ O painel é servido na `public-url` do host, junto com a API. Nele você:
 - cria service tokens para integração e consulta a auditoria;
 - gerencia extensões, como o Cloudflare Tunnel.
 
-Login: `admin` + a senha do primeiro start (ou `WM_ADMIN_PASSWORD` no primeiro start). Sessão
-cookie HttpOnly de 12 h; mutações exigem CSRF. Não existe login de aluno.
+Login administrativo: conta admin escolhida no setup; cookie HttpOnly de 12 h e
+CSRF nas mutações. A conta comum autentica em `/api/v1/auth/*`, mas não acessa a
+API admin, extensões ou SSE administrativo. Contas humanas não são identidades de nó.
+`WM_ADMIN_PASSWORD` continua apenas como seed permanente legado explícito, sem bootstrap.
 
 Integração somente leitura:
 

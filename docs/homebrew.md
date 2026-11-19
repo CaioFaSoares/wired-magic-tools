@@ -3,8 +3,10 @@
 ## Estado atual
 
 - Tap público: <https://github.com/CaioFaSoares/homebrew-tap>, branch `main`.
-- Release `v0.1.6` publicada e `Formula/wired-magic.rb` presente no tap. `brew tap`,
-  `brew info` e `brew install` foram validados com o Homebrew 7.
+- Release `v0.1.8` publicada e `Formula/wired-magic.rb` presente no tap. `brew tap`,
+  `brew info` e `brew install` foram validados com o Homebrew 7 em releases anteriores.
+- A release não compila Node nem assets React: o servidor é headless por padrão e o
+  painel web é um pacote opcional separado ([control panel](control-panel.md)).
 - O caminho recomendado compila e publica do seu Mac, sem gastar minutos de Actions e
   sem PAT/secret: o script usa o seu login local do `gh` para criar a release e
   atualizar o tap.
@@ -29,7 +31,6 @@ com mensagem do Homebrew.
 Pré-requisitos:
 
 - `gh auth login` com permissão de escrita no repositório de origem e no tap;
-- `pnpm` para recompilar a web embutida;
 - Rust com os targets `aarch64-apple-darwin` e `x86_64-apple-darwin`. O script tenta
   `rustup target add` quando o `rustup` está disponível e explica o comando quando
   não está. Ele prefere um rustup em `.cargo-home/bin` (usado nos testes locais)
@@ -40,13 +41,13 @@ binário) e o commit precisa estar no GitHub antes da publicação real. Depois 
 commitar e enviar com `git push`:
 
 ```sh
-scripts/publish_macos.sh --tag v0.1.6
+scripts/publish_macos.sh --tag v0.1.8
 ```
 
 O script:
 
 1. valida que `vX.Y.Z` é estável e igual a `workspace.package.version`;
-2. recompila `web/dist` e os binários release nas duas arquiteturas;
+2. compila os binários release nas duas arquiteturas (sem Node ou `web/dist`);
 3. executa smoke tests `--version`/`--help` no binário nativo e, via Rosetta quando
    disponível, no `x86_64`;
 4. empacota apenas `wm`, calcula `SHA256SUMS` e gera `wired-magic.rb`;
@@ -58,11 +59,11 @@ O script:
 Opções úteis:
 
 ```sh
-scripts/publish_macos.sh --tag v0.1.6 --dry-run          # compila e mostra o plano
-scripts/publish_macos.sh --tag v0.1.6 --arch host        # só a arquitetura deste Mac
-scripts/publish_macos.sh --tag v0.1.6 --binaries ./out   # usa out/wm-arm64 e out/wm-x86_64
-scripts/publish_macos.sh --tag v0.1.6 --from-release     # só atualiza o tap
-scripts/publish_macos.sh --tag v0.1.6 --no-tap           # só a release
+scripts/publish_macos.sh --tag v0.1.8 --dry-run          # compila e mostra o plano
+scripts/publish_macos.sh --tag v0.1.8 --arch host        # só a arquitetura deste Mac
+scripts/publish_macos.sh --tag v0.1.8 --binaries ./out   # usa out/wm-arm64 e out/wm-x86_64
+scripts/publish_macos.sh --tag v0.1.8 --from-release     # só atualiza o tap
+scripts/publish_macos.sh --tag v0.1.8 --no-tap           # só a release
 ```
 
 `--from-release` baixa os assets de uma release já publicada (por exemplo, a criada
