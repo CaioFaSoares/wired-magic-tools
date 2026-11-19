@@ -1,0 +1,21 @@
+# Optional packaging only; not an ancestor or dependency of the default image.
+# docker build -f Dockerfile.panel --output type=local,dest=dist/panel-artifacts .
+FROM node:22-bookworm-slim AS web
+WORKDIR /src/web
+RUN corepack enable && corepack prepare pnpm@10.34.9 --activate
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN --mount=type=cache,id=wm-panel-pnpm-v10,target=/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile --store-dir=/pnpm/store
+COPY web/ ./
+RUN pnpm build
+
+FROM python:3.12-slim-bookworm AS package
+WORKDIR /src
+COPY Cargo.toml ./
+COPY extensions/public/control_panel/extension.toml ./extensions/public/control_panel/extension.toml
+COPY scripts/package_control_panel.py ./scripts/package_control_panel.py
+COPY --from=web /src/web/dist ./web/dist
+RUN python3 scripts/package_control_panel.py --output /out/control_panel.tar.gz
+
+FROM scratch AS artifact
+COPY --from=package /out/ /

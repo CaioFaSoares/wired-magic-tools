@@ -22,8 +22,19 @@ proteger a malha.
 - **Token de nó** (`wmn_...`): opaco, hash SHA-256 no SQLite; vai em `Authorization: Bearer`.
   Revogar o nó apaga os tokens (`revoked_at`) e remove a conexão do relay.
 - **Relay token**: Ed25519 assinado, audiência fixa, TTL 1 h. O relay rejeita outro host/exp.
-- **Admin**: argon2id; sessão de 12 h em cookie HttpOnly/SameSite=Lax; CSRF obrigatório em
-  mutações; rate limit de login por IP.
+- **Contas humanas**: argon2id; sessão de 12 h em cookie HttpOnly/SameSite=Lax;
+  CSRF obrigatório em mutações e rate limit de login por IP. Só role `admin`
+  administra nós, ACL, convites, extensões e SSE; role `user` consulta a própria sessão.
+- **Bootstrap**: configurado por env somente em banco novo, hash persistido, cookie
+  separado `wm_setup` de 600 s + CSRF. Não é admin nem identidade de nó. Criação
+  atômica de admin + usuário consome setup e revoga todas as sessões temporárias.
+  Manter/recolocar env não reabre setup nem redefine senhas; remova os segredos
+  após concluir e preserve o volume. [Primeiro acesso](remote-admin.md).
+- **Painel opcional**: não há React no build padrão. Ativar `control_panel` exige
+  admin + CSRF e digest confirmado; arquivos são verificados e servidos por snapshot.
+  Pacote instalado não significa pacote ativo. É JavaScript confiável na origem
+  da API, **não sandbox**: só instale código de procedência confiável.
+  [Modelo de confiança e limites](control-panel.md).
 - **Service token** (`wms_...`): escopo `integration:nodes:read`; só leitura de nós.
 - Chaves privadas WG ficam no nó (`agent-state.json`, 0600). O control nunca as recebe.
 

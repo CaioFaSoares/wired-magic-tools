@@ -16,4 +16,7 @@ relay_region = "vps-sa"
 stun_enabled = true
 stun_listen = "0.0.0.0:3478"
 # stun_urls = ["stun:mesh.exemplo.com:3478"]
-# admin_password = "troque-isto"
+# Fresh servers require WM_BOOTSTRAP_USERNAME + WM_BOOTSTRAP_PASSWORD (12+ bytes),
+# or WM_BOOTSTRAP_PASSWORD_FILE for a secret file. Complete setup via `wm admin ... tui`.
+# Headless by default; React panel is optional and runtime-activated.
+# admin_password is legacy-only and skips temporary setup; do not use for new installs.

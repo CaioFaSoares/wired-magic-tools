@@ -1,0 +1,628 @@
+{
+  "started_at": "2026-11-16T14:46:50.458249+00:00",
+  "root": "/Users/caio/_Nexus/valus/_Workspace/_projects/tools/wired-magic-tools",
+  "git_commit": "6c03b9c5b98cff620575abc9671d8e3fbcdf892a",
+  "git_status_at_start": "?? scripts/audit-codehygiene.py\n",
+  "tool_path": "/Users/caio/_Nexus/valus/_Workspace/_projects/tools/codehygiene",
+  "tool_version": "0.4.0",
+  "tool_commit": "423c7e1f02ef409bbaea209268bfcde36e0f1cb0",
+  "tool_sha256": "3c991bf39392e2d06bc2c3da152f3857c8a263a079530091942e17f0625f1848",
+  "weights_sha256": "85a3d926cd71f0f6024b0ee1e0cb5223980c046203bf8fbcf68a6598ee9c0e0d",
+  "python": "3.12.14 (main, Sep  1 2026, 14:09:38) [Clang 22.1.3 ]",
+  "window_lines": 256,
+  "overlap_lines": 64,
+  "threshold": 0.55,
+  "columns_seen_by_model": 128,
+  "semantics": "All tracked selected source covered by overlapping bounded windows. Scores are window heuristics, not native full-file scores. Diagnostics remapped and deduplicated by original line+kind. No code execution, no automatic fixes, no security/performance certification. Shell is auxiliary heuristic coverage. Config/docs/assets require manual review.",
+  "selected": [
+    "crates/wm-control/src/acl.rs",
+    "crates/wm-control/src/api/admin.rs",
+    "crates/wm-control/src/api/install.rs",
+    "crates/wm-control/src/api/integration.rs",
+    "crates/wm-control/src/api/mod.rs",
+    "crates/wm-control/src/api/node.rs",
+    "crates/wm-control/src/api/relay_ws.rs",
+    "crates/wm-control/src/api/shares.rs",
+    "crates/wm-control/src/api/spa.rs",
+    "crates/wm-control/src/auth.rs",
+    "crates/wm-control/src/compliance.rs",
+    "crates/wm-control/src/config.rs",
+    "crates/wm-control/src/db.rs",
+    "crates/wm-control/src/extensions/adapters.rs",
+    "crates/wm-control/src/extensions/cloudflared.rs",
+    "crates/wm-control/src/extensions/mod.rs",
+    "crates/wm-control/src/extensions/node.rs",
+    "crates/wm-control/src/extensions/store.rs",
+    "crates/wm-control/src/lib.rs",
+    "crates/wm-control/src/relay.rs",
+    "crates/wm-control/src/server.rs",
+    "crates/wm-control/src/state.rs",
+    "crates/wm-control/src/stun.rs",
+    "crates/wm-control/tests/api.rs",
+    "crates/wm-control/tests/enrollment.rs",
+    "crates/wm-control/tests/extensions_activation.rs",
+    "crates/wm-control/tests/extensions_api.rs",
+    "crates/wm-control/tests/identity_requirements.rs",
+    "crates/wm-control/tests/shares_api.rs",
+    "crates/wm-core/src/agent.rs",
+    "crates/wm-core/src/control.rs",
+    "crates/wm-core/src/expose.rs",
+    "crates/wm-core/src/extensions/cloudflared.rs",
+    "crates/wm-core/src/extensions/exec.rs",
+    "crates/wm-core/src/extensions/hooks.rs",
+    "crates/wm-core/src/extensions/logs.rs",
+    "crates/wm-core/src/extensions/mod.rs",
+    "crates/wm-core/src/extensions/process.rs",
+    "crates/wm-core/src/lib.rs",
+    "crates/wm-core/src/local.rs",
+    "crates/wm-core/src/packet.rs",
+    "crates/wm-core/src/relay_client.rs",
+    "crates/wm-core/src/state.rs",
+    "crates/wm-core/src/stun.rs",
+    "crates/wm-core/src/tun.rs",
+    "crates/wm-core/src/wireguard.rs",
+    "crates/wm-ext/src/admin.rs",
+    "crates/wm-ext/src/cloudflared.rs",
+    "crates/wm-ext/src/components.rs",
+    "crates/wm-ext/src/context.rs",
+    "crates/wm-ext/src/exec.rs",
+    "crates/wm-ext/src/lib.rs",
+    "crates/wm-ext/src/manifest.rs",
+    "crates/wm-ext/src/preferences.rs",
+    "crates/wm-proto/src/lib.rs",
+    "crates/wm-proto/src/share.rs",
+    "crates/wm-tui/src/actions.rs",
+    "crates/wm-tui/src/agent.rs",
+    "crates/wm-tui/src/app.rs",
+    "crates/wm-tui/src/authorization.rs",
+    "crates/wm-tui/src/catalog.rs",
+    "crates/wm-tui/src/command.rs",
+    "crates/wm-tui/src/desktop.rs",
+    "crates/wm-tui/src/extension_ui.rs",
+    "crates/wm-tui/src/lib.rs",
+    "crates/wm-tui/src/pane.rs",
+    "crates/wm-tui/src/persist.rs",
+    "crates/wm-tui/src/profiles.rs",
+    "crates/wm-tui/src/remote_admin.rs",
+    "crates/wm-tui/src/ui.rs",
+    "crates/wm-tui/src/updater.rs",
+    "crates/wm/src/admin.rs",
+    "crates/wm/src/chat.rs",
+    "crates/wm/src/chat_assets/app.js",
+    "crates/wm/src/chat_tui.rs",
+    "crates/wm/src/debug.rs",
+    "crates/wm/src/debug_assets/app.js",
+    "crates/wm/src/debug_tui.rs",
+    "crates/wm/src/desktop.rs",
+    "crates/wm/src/discovery.rs",
+    "crates/wm/src/extensions/chat/cli.rs",
+    "crates/wm/src/extensions/chat/core.rs",
+    "crates/wm/src/extensions/chat/gui.rs",
+    "crates/wm/src/extensions/chat/mod.rs",
+    "crates/wm/src/extensions/chat/tui.rs",
+    "crates/wm/src/extensions/debug/cli.rs",
+    "crates/wm/src/extensions/debug/core/mod.rs",
+    "crates/wm/src/extensions/debug/core/terminal.rs",
+    "crates/wm/src/extensions/debug/gui.rs",
+    "crates/wm/src/extensions/debug/mod.rs",
+    "crates/wm/src/extensions/debug/tui.rs",
+    "crates/wm/src/extensions/mod.rs",
+    "crates/wm/src/gui.rs",
+    "crates/wm/src/main.rs",
+    "crates/wm/src/packages.rs",
+    "crates/wm/src/service.rs",
+    "examples/extensions/tui-panel/panel.sh",
+    "extensions/private/debug-publish/publish.sh",
+    "extensions/private/seance/activate.sh",
+    "extensions/private/seance/deactivate.sh",
+    "extensions/private/seance/install.sh",
+    "extensions/public/chat_gui/activate.sh",
+    "extensions/public/chat_gui/deactivate.sh",
+    "extensions/public/chat_gui/install.sh",
+    "extensions/public/debug_gui/activate.sh",
+    "extensions/public/debug_gui/deactivate.sh",
+    "extensions/public/debug_gui/debug-discover",
+    "extensions/public/debug_gui/install.sh",
+    "scripts/e2e-docker.sh",
+    "scripts/e2e_assert.py",
+    "scripts/homebrew_formula.py",
+    "scripts/publish_macos.sh",
+    "scripts/smoke-local.py",
+    "scripts/test_e2e_assert.py",
+    "scripts/test_homebrew_formula.py",
+    "scripts/verify-local.sh",
+    "web/src/App.tsx",
+    "web/src/auth/AuthProvider.tsx",
+    "web/src/components/MeshTopology.tsx",
+    "web/src/components/Modal.tsx",
+    "web/src/components/Shell.tsx",
+    "web/src/components/Toast.tsx",
+    "web/src/components/badges.tsx",
+    "web/src/components/ui.tsx",
+    "web/src/lib/aclExamples.ts",
+    "web/src/lib/api.ts",
+    "web/src/lib/clipboard.ts",
+    "web/src/lib/env.ts",
+    "web/src/lib/errors.ts",
+    "web/src/lib/format.ts",
+    "web/src/lib/mock.ts",
+    "web/src/lib/nodes.ts",
+    "web/src/lib/queries.ts",
+    "web/src/lib/types.ts",
+    "web/src/lib/useControlEvents.ts",
+    "web/src/main.tsx",
+    "web/src/pages/AclPage.tsx",
+    "web/src/pages/AuditPage.tsx",
+    "web/src/pages/CloudflarePage.tsx",
+    "web/src/pages/ExtensionDetailPage.tsx",
+    "web/src/pages/ExtensionsPage.tsx",
+    "web/src/pages/IntegrationPage.tsx",
+    "web/src/pages/LoginPage.tsx",
+    "web/src/pages/NodesPage.tsx",
+    "web/src/pages/NotFoundPage.tsx",
+    "web/src/pages/OverviewPage.tsx",
+    "web/src/pages/RelayPage.tsx",
+    "web/src/pages/SettingsPage.tsx",
+    "web/src/pages/TokensPage.tsx",
+    "web/src/vite-env.d.ts",
+    "web/vite.config.ts"
+  ],
+  "excluded": [
+    {
+      "path": ".dockerignore",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": ".env.example",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": ".github/workflows/release-macos.yml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": ".gitignore",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "Cargo.lock",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "Cargo.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "Dockerfile",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "Makefile",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm-control/Cargo.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm-core/Cargo.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm-ext/Cargo.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm-proto/Cargo.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm-tui/Cargo.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm/Cargo.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm/src/chat_assets/app.css",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm/src/chat_assets/index.html",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm/src/debug_assets/app.css",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm/src/debug_assets/index.html",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "crates/wm/src/gui.html",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "deploy/Caddyfile",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "deploy/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "deploy/control.toml.example",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "deploy/e2e/Dockerfile",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "deploy/launchd/com.wired-magic.agent.plist",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "deploy/systemd/wired-magic-agent.service",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "deploy/systemd/wired-magic-host.service",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "dist/README.md",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "dist/SHA256SUMS",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "dist/wm-darwin-arm64",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "dist/wm-linux-arm64",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "docker-compose.yml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/API.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/DEPLOY-COOLIFY.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/DEPLOY-VPS.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/E2E-ASSERTIVO.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/IMPLEMENTACAO-STATUS.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/INTEGRATION-SEANCE.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/MACOS-DESKTOP.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/PLANO-PRONTIDAO.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/RESEARCH.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/RUNBOOK-TAUA.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/SERVICOS-TESTE.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/SHARES.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/TESTE-LOCAL.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/TROUBLESHOOTING.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/adr/0001-data-plane-boringtun.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/adr/0002-control-plane-map.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/adr/0003-relay-transport.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/adr/0004-overlay-addressing.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/adr/0005-acl-and-integration.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/adr/0006-extension-runtime.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/adr/0007-hooks-adapters.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/benchmarks.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/extensions-core-first.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/extensions.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/homebrew.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/hooks-adapters.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/remote-admin.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/screenshots/logo-dark.png",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/screenshots/logo-light.png",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/screenshots/tui-conexao.png",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/screenshots/tui-inicio.png",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/screenshots/tui-mapa.png",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/screenshots/tui-peers.png",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "docs/screenshots/tui-shares.png",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "evidence/local/run.0i0djCOo/manifest.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "evidence/local/run.2mZvq2MK/manifest.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "evidence/local/run.DYGVjsVD/manifest.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "evidence/local/run.RKUVNA2L/manifest.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "evidence/local/run.XmhCDxTj/manifest.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "evidence/local/run.cSYN5gqs/manifest.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "examples/extensions/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "examples/extensions/hello/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "examples/extensions/tui-panel/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/private/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/private/debug-publish/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/private/debug-publish/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/private/seance/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/private/wm-flake.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/chat/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/chat/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/chat_gui/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/chat_gui/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/cloudflared/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/debug/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/debug/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/debug_gui/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "extensions/public/debug_gui/extension.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "scripts/__pycache__/e2e_assert.cpython-315.opt-1.pyc",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "scripts/__pycache__/e2e_assert.cpython-315.pyc",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "technical.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/.gitignore",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/README.md",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/dist/assets/index-8Usy6ShE.js",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "web/dist/assets/index-UQhug4fJ.css",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "web/dist/assets/query-vendor-B9rmkbHP.js",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "web/dist/assets/react-vendor-COe_4agS.js",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "web/dist/assets/yaml-vendor-AeuA_QOT.js",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "web/dist/favicon.svg",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "web/dist/index.html",
+      "reason": "generated/distribution"
+    },
+    {
+      "path": "web/index.html",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/package.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/pnpm-lock.yaml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/public/favicon.svg",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/src/index.css",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/tsconfig.app.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/tsconfig.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "web/tsconfig.node.json",
+      "reason": "not scored source (config/docs/assets/binary)"
+    },
+    {
+      "path": "wm-flake.toml",
+      "reason": "not scored source (config/docs/assets/binary)"
+    }
+  ]
+}

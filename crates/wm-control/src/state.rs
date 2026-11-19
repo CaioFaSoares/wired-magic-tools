@@ -7,7 +7,7 @@ use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use ipnet::Ipv4Net;
 use sqlx::SqlitePool;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Semaphore, broadcast, watch};
 
 use wm_proto::{CompiledAcl, ControlEvent, NetworkInfo, NodeId, RelayClaims, RelayInfo};
 
@@ -31,6 +31,8 @@ pub struct AppState {
     pub overlay: Ipv4Net,
     pub login_limiter: RateLimiter,
     pub enroll_limiter: RateLimiter,
+    /// Serialize memory-hard work, but run it off the async reactor.
+    pub password_work: Arc<Semaphore>,
     pub presence: Mutex<HashMap<NodeId, bool>>,
 }
 
@@ -56,12 +58,7 @@ impl AppState {
         };
         let control_pubkey = auth::public_key_b64(&signing_key);
 
-        let generated_pw = db::ensure_admin(
-            &db,
-            "admin",
-            cfg.admin_password.as_deref(),
-        )
-        .await?;
+        initialize_accounts(&db, &mut cfg).await?;
 
         // Extensions are loaded from disk once the state directory exists. A
         // bad manifest becomes a warning, never a boot failure.
@@ -89,12 +86,14 @@ impl AppState {
             overlay,
             login_limiter: RateLimiter::new(10, Duration::from_secs(60)),
             enroll_limiter: RateLimiter::new(60, Duration::from_secs(60)),
+            password_work: Arc::new(Semaphore::new(1)),
             presence: Mutex::new(HashMap::new()),
         });
 
         // Persist the initial version so restarts never reuse an old map number.
         let _ = db::set_setting(&state.db, "map_version", &state.current_version().to_string()).await;
-        Ok((state, generated_pw))
+        // Preserve the historical return shape, never return/generated-print a secret.
+        Ok((state, None))
     }
 
     pub fn current_version(&self) -> u64 {
@@ -179,6 +178,68 @@ impl AppState {
     }
 }
 
+async fn initialize_accounts(db: &SqlitePool, cfg: &mut ControlConfig) -> anyhow::Result<()> {
+    let legacy = cfg.admin_password.take();
+    let username = cfg.bootstrap_username.take();
+    let password = cfg.bootstrap_password.take();
+    let password_file = cfg.bootstrap_password_file.take();
+    // Consumed state is authoritative. Ignore even malformed/deleted secret
+    // files after completion, and never repopulate a deleted permanent account.
+    if !db::setup_required(db).await? || db::bootstrap(db).await?.is_some() {
+        return Ok(());
+    }
+    let has_bootstrap = username.is_some() || password.is_some() || password_file.is_some();
+    if legacy.is_some() && has_bootstrap {
+        anyhow::bail!("configuração ambígua: use bootstrap OU WM_ADMIN_PASSWORD legado, não ambos");
+    }
+    if let Some(password) = legacy {
+        tracing::warn!("WM_ADMIN_PASSWORD/admin_password está obsoleto: cria admin permanente; prefira WM_BOOTSTRAP_USERNAME e WM_BOOTSTRAP_PASSWORD[_FILE]");
+        db::ensure_admin(db, "admin", Some(&password)).await?;
+        return Ok(());
+    }
+    let username = username.ok_or_else(|| anyhow::anyhow!(
+        "banco novo exige WM_BOOTSTRAP_USERNAME e WM_BOOTSTRAP_PASSWORD (ou _FILE); nenhuma senha é gerada automaticamente"
+    ))?;
+    if password.is_some() && password_file.is_some() {
+        anyhow::bail!("use apenas WM_BOOTSTRAP_PASSWORD ou WM_BOOTSTRAP_PASSWORD_FILE");
+    }
+    let password = match (password, password_file) {
+        (Some(password), None) => password,
+        (None, Some(path)) => tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+            use std::io::Read;
+            // Check before opening too: a configured FIFO must not block boot.
+            if !std::fs::metadata(&path).context("inspecionando arquivo de senha bootstrap")?.is_file() {
+                anyhow::bail!("arquivo de senha bootstrap precisa ser arquivo regular");
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)] {
+                use std::os::unix::fs::OpenOptionsExt;
+                // Secret-volume symlinks are supported, but a raced FIFO must
+                // never block open. Validate the held descriptor below.
+                options.custom_flags(libc::O_NONBLOCK);
+            }
+            let file = options.open(&path).context("abrindo arquivo de senha bootstrap")?;
+            if !file.metadata()?.is_file() {
+                anyhow::bail!("arquivo de senha bootstrap precisa ser arquivo regular");
+            }
+            let mut password = String::new();
+            file.take(1027).read_to_string(&mut password).context("lendo arquivo de senha bootstrap")?;
+            if password.ends_with('\n') {
+                password.pop();
+                if password.ends_with('\r') { password.pop(); }
+            }
+            Ok(password)
+        }).await??,
+        _ => anyhow::bail!("banco novo exige WM_BOOTSTRAP_PASSWORD ou WM_BOOTSTRAP_PASSWORD_FILE"),
+    };
+    crate::api::accounts::validate_new_credentials(&username, &password)
+        .map_err(|e| anyhow::anyhow!("bootstrap inválido: {}", e.message))?;
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password)).await??;
+    db::seed_bootstrap(db, &username, &hash).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,8 +251,9 @@ mod tests {
         let mut cfg = ControlConfig::default();
         cfg.data_dir = dir.path().to_path_buf();
         cfg.public_url = "http://127.0.0.1:18080".into();
+        cfg.admin_password = Some("test-explicit-legacy".into());
         let (state, pw) = AppState::new(cfg).await.unwrap();
-        assert!(pw.is_some());
+        assert!(pw.is_none());
         let node = Uuid::new_v4();
         let info = state.relay_info_for(node).unwrap();
         let claims =

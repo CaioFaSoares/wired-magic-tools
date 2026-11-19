@@ -16,19 +16,16 @@ use crate::state::AppState;
 use crate::stun;
 
 pub async fn run(cfg: ControlConfig) -> anyhow::Result<()> {
-    let bind = cfg.listen;
-    let use_tls = cfg.tls_cert.is_some();
-    let public_url = cfg.public_url.clone();
-    let (state, generated_password) = AppState::new(cfg).await?;
+    let (state, _) = AppState::new(cfg).await?;
+    run_state(state).await
+}
 
-    if let Some(password) = &generated_password {
-        println!();
-        println!("  wired-magic — primeiro start");
-        println!("  painel:   {public_url}");
-        println!("  usuário:  admin");
-        println!("  senha:    {password}");
-        println!("  (guardada só como hash; anote agora)");
-        println!();
+/// Serve an already initialized state, so host can validate setup before spawn.
+pub async fn run_state(state: Arc<AppState>) -> anyhow::Result<()> {
+    let bind = state.cfg.listen;
+    let use_tls = state.cfg.tls_cert.is_some();
+    if db::setup_required(&state.db).await? {
+        tracing::info!("configuração inicial pendente: use o fluxo de setup com a credencial bootstrap configurada");
     }
 
     if state.cfg.stun_enabled {

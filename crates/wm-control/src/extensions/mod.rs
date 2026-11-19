@@ -21,6 +21,7 @@
 
 pub mod adapters;
 pub mod cloudflared;
+pub mod control_panel;
 pub mod node;
 pub mod store;
 
@@ -66,6 +67,7 @@ pub struct ExtensionRegistry {
     manifests: RwLock<BTreeMap<String, ExtensionManifest>>,
     code: BTreeMap<String, Arc<dyn ControlExtension>>,
     warnings: RwLock<Vec<String>>,
+    pub(crate) panel: Arc<control_panel::PanelRuntime>,
 }
 
 impl ExtensionRegistry {
@@ -92,6 +94,9 @@ impl ExtensionRegistry {
         let cloudflared: Arc<dyn ControlExtension> = Arc::new(cloudflared::CloudflaredExtension);
         let mut code: BTreeMap<String, Arc<dyn ControlExtension>> = BTreeMap::new();
         code.insert(cloudflared.id().to_string(), cloudflared);
+        let panel: Arc<dyn ControlExtension> = Arc::new(control_panel::PanelExtension);
+        manifests.insert(panel.id().to_string(), panel.manifest());
+        code.insert(panel.id().to_string(), panel);
         for warning in &warnings {
             tracing::warn!(%warning, "extensão ignorada no carregamento");
         }
@@ -100,6 +105,7 @@ impl ExtensionRegistry {
             manifests: RwLock::new(manifests),
             code,
             warnings: RwLock::new(warnings),
+            panel: Arc::new(control_panel::PanelRuntime::load(data_dir)),
         })
     }
 
@@ -150,6 +156,10 @@ impl ExtensionRegistry {
             let builtin = wm_ext::builtin_cloudflared_manifest();
             manifests.insert(builtin.id.clone(), builtin);
         }
+        // Server-only runtime remains registered even if no asset package is
+        // installed. Reloading metadata never activates or refreshes its code.
+        let panel = control_panel::PanelExtension;
+        manifests.insert(panel.id().to_string(), panel.manifest());
         if let Ok(mut current) = self.manifests.write() {
             *current = manifests;
         }
@@ -215,6 +225,9 @@ impl ExtensionRegistry {
         manifest: &ExtensionManifest,
         node: &NodeRow,
     ) -> anyhow::Result<bool> {
+        if manifest.id == control_panel::ID {
+            return Ok(false);
+        }
         if let Some(row) = store::get_activation(&state.db, &manifest.id, node.uuid()).await? {
             return Ok(row.enabled());
         }
@@ -257,6 +270,9 @@ impl ExtensionRegistry {
         let requests = store::requests_for_node(&state.db, node.uuid()).await?;
         let mut out = Vec::new();
         for manifest in self.manifests() {
+            if manifest.id == control_panel::ID {
+                continue; // Server application, never a node-side install/action.
+            }
             let active = self.is_active(state, &manifest, node).await?;
             let configured = match manifest.node_driver {
                 NodeDriver::Cloudflared => cloudflared::has_config(state, node).await?,
@@ -299,6 +315,9 @@ impl ExtensionRegistry {
         active: bool,
         actor: &str,
     ) -> anyhow::Result<Option<NodeExtensionView>> {
+        if extension_id == control_panel::ID {
+            return Ok(None); // Runtime API, not an activation record per node.
+        }
         let Some(manifest) = self.manifest(extension_id) else {
             return Ok(None);
         };

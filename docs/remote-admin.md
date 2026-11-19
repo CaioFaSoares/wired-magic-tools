@@ -16,6 +16,42 @@ teclas para um shell no servidor nem compartilha sua sessão de terminal.
 - Ser admin em A não permite administrar B. Sessões expiradas/revogadas exigem
   novo login. O token de inscrição do nó não substitui o login administrativo.
 
+## Primeiro acesso: bootstrap temporário
+
+No servidor novo, configure `WM_BOOTSTRAP_USERNAME` e `WM_BOOTSTRAP_PASSWORD`
+(senha única de 12–1024 bytes) antes de iniciar `wm serve` ou `wm host`.
+Alternativamente, use `WM_BOOTSTRAP_PASSWORD_FILE` com um arquivo secreto legível
+pelo processo; não forneça ambos os formatos. Nenhuma senha é sorteada ou impressa.
+Sem essas credenciais, um banco novo recusa iniciar. HTTPS continua necessário.
+
+```sh
+wm admin --server https://vpn.example tui
+```
+
+Entre com a credencial temporária. A TUI consulta o estado de setup e pede uma
+conta **admin definitiva** e uma conta **de usuário cotidiano**, com confirmação
+de senhas. Nomes: 1–64 caracteres ASCII, letras/números/`_`/`.`/`-`, distintos sem
+diferenciar maiúsculas. Senhas: 12–1024 bytes. Confirme com `y`: ambas as contas
+são criadas numa única transação, todas as sessões bootstrap são revogadas e o
+setup fica consumido permanentemente. A TUI entra com a conta cotidiana.
+
+Remova as variáveis bootstrap após concluir. Reiniciar com elas presentes não
+reabre setup nem altera senhas; o estado vive no SQLite e depende de preservar
+seu volume. Uma sessão bootstrap expira em dez minutos e não permite administrar
+nós/extensões. Se uma resposta de conclusão se perder, reconecte com a conta
+criada antes de tentar novamente. A TUI não persiste credenciais.
+
+Contas comuns podem autenticar e consultar a própria sessão, mas **não** recebem
+permissões administrativas, convites ou identidade de nó automaticamente. A TUI
+mostra perfil/status; para administrar, saia e entre como admin. A inscrição dos
+nós continua sendo um fluxo separado. Recursos sociais/isolamento multiusuário
+não foram introduzidos por este setup.
+
+Bancos existentes preservam contas e sessões admin. `WM_ADMIN_PASSWORD` /
+`admin_password` são somente compatibilidade explícita legada: num banco novo
+criam um admin permanente e **não** executam este setup. Não combine com bootstrap;
+para novos servidores, use o fluxo temporário acima.
+
 ## TUI
 
 ```sh
@@ -30,6 +66,14 @@ páginas de visão geral, nós, ACL/acessos, extensões e status das operações
 HTTP na malha exige opt-in no formulário. ACL e configuração são editáveis no
 próprio terminal; ações destrutivas pedem confirmação. Status não é um stream de
 stdout/logs dos serviços remotos.
+
+### Painel React opcional
+
+O servidor inicia headless, sem assets React e sem Node no build padrão. Na página
+**Extensões** da TUI admin, pressione `p` para consultar o painel do **servidor**
+(não um nó), instale o pacote conforme [painel opcional](control-panel.md), pressione
+`r` para verificar o digest e `a` para ativar com confirmação. `d` desativa.
+Nenhuma ativação é permitida durante bootstrap ou para uma conta comum.
 
 ## CLI
 

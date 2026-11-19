@@ -29,7 +29,6 @@ TAG=""
 ARCH="both"
 BINARIES=""
 FROM_RELEASE=0
-SKIP_WEB=0
 NO_TAP=0
 DRY_RUN=0
 ALLOW_DIRTY=0
@@ -46,7 +45,7 @@ Options:
   --arch both|arm64|x86_64|host   architectures to build (default: both)
   --binaries DIR      use DIR/wm-arm64 and DIR/wm-x86_64 instead of building
   --from-release      download assets from an existing GitHub release; only tap
-  --skip-web          reuse web/dist instead of rebuilding embedded assets
+  --skip-web          deprecated no-op (server builds never require web assets)
   --no-tap            publish the GitHub release but do not update the tap
   --tap-repo OWNER/homebrew-NAME   tap repository (default: owner/homebrew-tap)
   --tap-branch NAME   tap branch (default: main)
@@ -68,7 +67,7 @@ while [ $# -gt 0 ]; do
         --arch) ARCH="${2:?--arch requires a value}"; shift 2 ;;
         --binaries) BINARIES="${2:?--binaries requires a value}"; shift 2 ;;
         --from-release) FROM_RELEASE=1; shift ;;
-        --skip-web) SKIP_WEB=1; shift ;;
+        --skip-web) log "--skip-web é obsoleto: servidor sempre headless; painel é pacote separado"; shift ;;
         --no-tap) NO_TAP=1; shift ;;
         --tap-repo) TAP_REPO="${2:?--tap-repo requires a value}"; shift 2 ;;
         --tap-branch) TAP_BRANCH="${2:?--tap-branch requires a value}"; shift 2 ;;
@@ -218,13 +217,6 @@ else
             fi
             [ -d "$target_lib" ] || die "target $triple não instalado. Instale com 'rustup target add $triple' ou use '--arch host' / '--binaries DIR'"
         done
-        if [ "$SKIP_WEB" -eq 0 ]; then
-            command -v pnpm >/dev/null || die "pnpm não encontrado (instale pnpm ou use --binaries)"
-            log "compilando web embutida"
-            CI=true pnpm --dir web install --frozen-lockfile
-            CI=true pnpm --dir web build
-        fi
-        [ -f web/dist/index.html ] || die "web/dist/index.html ausente; rode sem --skip-web"
     fi
 
     for arch in "${ARCHS[@]}"; do
@@ -247,10 +239,8 @@ else
             fi
             [ -d "$target_lib" ] || die "target $triple não instalado. Instale com 'rustup target add $triple' ou use '--arch host' / '--binaries DIR'"
             log "compilando $triple (release)"
-            # rust-embed reads web/dist at compile time; force the crate that
-            # embeds it to rerun after a fresh pnpm build.
-            cargo clean -p wm-control --target "$triple" >/dev/null 2>&1 || true
-            cargo build --locked --release -p wired-magic --bin wm --target "$triple"
+            # React is a separate optional package; never invoke Node here.
+            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" cargo build --locked --release -p wired-magic --bin wm --target "$triple"
             source_bin="$ROOT/target/$triple/release/wm"
         fi
 

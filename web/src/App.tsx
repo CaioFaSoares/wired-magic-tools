@@ -57,7 +57,7 @@ function DocumentTitle() {
       "/nodes": "Nós",
       "/tokens": "Tokens de entrada",
       "/acl": "ACL",
-      "/relay": "Relay e STUN",
+      "/relay-status": "Relay e STUN",
       "/integration": "Integração",
       "/audit": "Auditoria",
       "/settings": "Configurações",
@@ -148,7 +148,7 @@ export function App() {
                 <Route path="/nodes" element={<NodesPage />} />
                 <Route path="/tokens" element={<TokensPage />} />
                 <Route path="/acl" element={<AclPage />} />
-                <Route path="/relay" element={<RelayPage />} />
+                <Route path="/relay-status" element={<RelayPage />} />
                 <Route path="/integration" element={<IntegrationPage />} />
                 <Route path="/audit" element={<AuditPage />} />
                 <Route path="/settings" element={<SettingsPage />} />

@@ -170,7 +170,7 @@ export function SettingsPage() {
             title="Relay e STUN"
             description="Configuração anunciada aos agentes; o estado vivo fica em Relay e STUN."
             icon={<Globe aria-hidden="true" className="size-4" />}
-            actions={<LinkButton to="/relay" variant="ghost" size="sm">Abrir relay</LinkButton>}
+            actions={<LinkButton to="/relay-status" variant="ghost" size="sm">Abrir relay</LinkButton>}
           />
           <dl className="px-4 py-1">
             <ReadOnlyRow

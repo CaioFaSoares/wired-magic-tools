@@ -4,9 +4,13 @@ Painel de gestão do control plane da malha, em português. Stack: Vite + React 
 TypeScript + Tailwind CSS 4 + React Router + TanStack Query. Não há login de aluno,
 terminal ou xterm neste escopo.
 
-A saída de build fica em `web/dist`, que o binário Rust embute com `rust-embed`
-(`crates/wm-control/src/api/spa.rs`). O `index.html` é servido na raiz e as rotas do
-painel funcionam com o fallback SPA do backend.
+O servidor padrão é **headless**: não compila nem embute React. A saída em
+`web/dist` pode ser empacotada como extensão opcional `control_panel`, instalada no
+servidor e ativada por admin com confirmação do digest, sem recompilar Rust.
+Veja [pacote, ativação e modelo de confiança](../docs/control-panel.md).
+Depois da ativação, `index.html` é servido na raiz com fallback SPA; namespaces da
+API/relay/download continuam reservados. JavaScript do pacote roda na mesma origem
+com a autoridade do operador autenticado: a extensão não é sandbox.
 
 ## Requisitos
 
@@ -32,8 +36,10 @@ Sem isso, o Node segura os headers até o primeiro keepalive (15 s) e o indicado
 
 ## Login
 
-Usuário `admin` e a senha do control plane. No primeiro start o binário imprime a
-senha gerada; também é possível seedar com `WM_ADMIN_PASSWORD`.
+Use a **conta admin permanente** escolhida no [setup inicial pela TUI](../docs/remote-admin.md).
+Não há senha gerada/impressa nem setup pelo React. Bootstrap e conta cotidiana não
+administram este painel; conclua o setup antes de ativá-lo. Bancos legados mantêm
+seus admins anteriores.
 
 - A sessão fica em cookie **HttpOnly / SameSite=Lax** (12 h).
 - O token **CSRF** é guardado em `sessionStorage` (somente a aba atual) e enviado
@@ -78,8 +84,11 @@ web/dist/favicon.svg
 
 O JS é dividido em chunks de vendor (`react`, `query`, `yaml`). Sem CDN, sem fontes
 externas e sem scripts inline; o CSP do backend permite apenas a própria origem.
-Depois do build, recompile o binário Rust para reembutir `web/dist` (o `rust-embed`
-lê a pasta em tempo de compilação).
+Na raiz do repositório, empacote com
+`python3 scripts/package_control_panel.py --output dist/control_panel.tar.gz`.
+O script não sobrescreve saídas existentes; escolha um novo nome para uma versão nova.
+Instale e confirme o digest seguindo [o guia do painel](../docs/control-panel.md).
+Não é necessário reconstruir ou reiniciar o binário Rust.
 
 Scripts: `dev`, `build`, `preview`, `typecheck`.
 
@@ -96,7 +105,7 @@ Prefixo fixo: `/api/v1`. Toda chamada admin usa o cookie; mutações exigem
 | Nós (`/nodes`) | `GET /admin/nodes`, `POST /admin/nodes/{id}/approve`, `PATCH /admin/nodes/{id}`, `DELETE /admin/nodes/{id}` |
 | Tokens (`/tokens`) | `GET/POST /admin/join-tokens`, `DELETE /admin/join-tokens/{id}` |
 | ACL (`/acl`) | `GET/PUT /admin/acl`, `POST /admin/acl/validate`, `POST /admin/acl/simulate`, `GET /admin/nodes` |
-| Relay e STUN (`/relay`) | `GET /admin/settings`, `GET /meta`, `GET /admin/overview`, `GET /admin/nodes` |
+| Relay e STUN (`/relay-status`; `/relay` é transporte WSS) | `GET /admin/settings`, `GET /meta`, `GET /admin/overview`, `GET /admin/nodes` |
 | Integração (`/integration`) | `GET/POST /admin/service-tokens`, `DELETE /admin/service-tokens/{id}`, `GET /integration/nodes` (teste com Bearer) |
 | Auditoria (`/audit`) | `GET /admin/audit?limit=N`, `GET /admin/events` (invalidação) |
 | Configurações (`/settings`) | `GET /admin/settings`, `GET /meta` |

@@ -30,7 +30,11 @@ sudo wm host \
   --data-dir /var/lib/wired-magic
 ```
 
-- O `wm host` grava a senha inicial do admin no primeiro start. Guarde-a.
+- Antes do primeiro start, configure `WM_BOOTSTRAP_USERNAME` e `WM_BOOTSTRAP_PASSWORD`
+  (ou `WM_BOOTSTRAP_PASSWORD_FILE`). Não há senha gerada nos logs. Pela TUI remota,
+  entre com essa credencial temporária e crie admin definitivo + usuário cotidiano:
+  `wm admin --server https://mesh.exemplo.com tui`. O bootstrap é invalidado;
+  só então o host inscreve o gateway. Veja [primeiro acesso](../docs/remote-admin.md).
 - Coloque o Caddy na frente (Caddyfile incluso) para TLS/ACME e WebSocket do relay.
 - Libere **443/tcp** e **3478/udp** no firewall. `41641/udp` é saída/inbound opcional dos nós.
 - Se quiser TLS direto, use `--tls-cert`/`--tls-key` e escute em `0.0.0.0:443`.
@@ -42,7 +46,10 @@ sudo cp deploy/systemd/wired-magic-host.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now wired-magic-host
 ```
 
-Ajuste a URL/porta no unit antes.
+Ajuste a URL/porta no unit antes. Para bootstrap no systemd, crie
+`/etc/wired-magic/bootstrap.env` com propriedade root e modo 0600, contendo as
+variáveis temporárias acima. O unit carrega esse arquivo se existir. Remova os
+segredos após concluir o setup; preserve o diretório de dados nos reinícios.
 
 ## 2. Macs do rack
 
@@ -91,7 +98,8 @@ O container então chama `http://10.66.0.12:8421` (Baguette) ou o IP do Mac que 
 
 ## 4. Convites e painel
 
-- Painel: `https://mesh.exemplo.com` (admin único).
+- Administração padrão: TUI/CLI. O [painel React](../docs/control-panel.md) é opcional,
+  instalado e ativado por admin depois do setup, sem rebuild do servidor.
 - Convite: crie em **Tokens** ou use o token impresso pelo `wm host` (10 usos por padrão).
 - ACL: comece com o template aberto e endureça em **ACL**. O simulador mostra a regra que casou.
 - Integração: crie um service token em **Integração** e configure o Seance com `Authorization: Bearer wms_...`.

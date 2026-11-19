@@ -18,22 +18,33 @@ Docker/Seance e SNAT). Este documento é o passo a passo operacional.
 
 ```sh
 # build local (Linux):
-cargo build --release -p wired-magic
+CARGO_BUILD_JOBS=1 cargo build --locked --release -p wired-magic
 sudo install -m755 target/release/wm /usr/local/bin/wm
 ```
 
 ## 2. Host
 
+Antes do primeiro start, grave uma senha temporária forte (12–1024 bytes) em
+`/etc/wired-magic/bootstrap.secret`, arquivo root-owned modo 0600. Passe a env ao
+processo root explicitamente (`sudo` normalmente filtra variáveis do seu shell).
+O servidor não precisa de Node nem de build React.
+
 ```sh
 sudo mkdir -p /var/lib/wired-magic
-sudo wm host \
+sudo env WM_BOOTSTRAP_USERNAME=setup \
+  WM_BOOTSTRAP_PASSWORD_FILE=/etc/wired-magic/bootstrap.secret \
+  wm host \
   --public-url https://mesh.exemplo.com \
   --listen 127.0.0.1:8080 \
   --data-dir /var/lib/wired-magic
 ```
 
-- O primeiro start imprime a senha do admin (ou use `WM_ADMIN_PASSWORD`).
-- Ele inscreve o host como `10.66.0.1` (gateway) e imprime um convite de 10 usos.
+- Após configurar o proxy abaixo, abra `wm admin --server https://mesh.exemplo.com tui`
+  no seu cliente. Entre como `setup` com a senha temporária e crie admin + usuário
+  cotidiano. [Fluxo e limites](remote-admin.md).
+- Não há senha impressa. Setup consome o bootstrap permanentemente; remova sua env
+  e o arquivo secreto após concluir. Não use bootstrap para tentar redefinir senhas.
+- Só depois disso o host se inscreve como `10.66.0.1` (gateway) e imprime o convite.
 - O host também conecta ao relay e ao STUN. Nada precisa escutar em 443 no processo; o Caddy
   faz TLS e repassa HTTP/WS para 127.0.0.1:8080.
 
@@ -59,6 +70,12 @@ curl https://mesh.exemplo.com/api/v1/meta
 ```
 
 ## 3. Systemd
+
+Para iniciar direto pelo serviço, configure `/etc/wired-magic/bootstrap.env`
+(root-owned, modo 0600) com `WM_BOOTSTRAP_USERNAME` e
+`WM_BOOTSTRAP_PASSWORD_FILE=/etc/wired-magic/bootstrap.secret`. A unit lê esse
+arquivo opcional. Após o setup, remova as variáveis bootstrap; preserve o volume.
+Não execute o start manual e o serviço simultaneamente nas mesmas portas/dados.
 
 ```sh
 sudo cp deploy/systemd/wired-magic-host.service /etc/systemd/system/
@@ -91,7 +108,9 @@ que precisar. O login do aluno continua no Seance; o wired-magic não tem portal
 
 ## 6. Convites, ACL e integração
 
-- Painel: `https://mesh.exemplo.com`.
+- Administração padrão: `wm admin --server https://mesh.exemplo.com tui` e CLI admin.
+- Painel web: `https://mesh.exemplo.com` somente após instalar/ativar a
+  [extensão opcional](control-panel.md). Não é requisito de deployment.
 - Tokens: crie por nó/grupo, com TTL curto; evite um token eterno de 100 usos.
 - ACL: comece restrito. Exemplo:
 

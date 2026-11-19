@@ -24,8 +24,11 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use serde_json::Value;
 use uuid::Uuid;
-use wm_ext::admin::{AdminClient, AdminClientOptions, AdminSession};
-use wm_proto::{AclView, NodeView, Overview};
+use wm_ext::admin::{AccountSession, SetupSession, AdminClient, AdminClientOptions};
+use wm_proto::{AccountCredentials, AccountRole, AccountUser, SetupCompleteRequest, AclView, NodeView, Overview};
+
+mod setup;
+use setup::{SetupForm, FormAction};
 
 const MAX_FORM: usize = 64 * 1024;
 const MAX_LOGIN: usize = 2048;
@@ -59,7 +62,10 @@ impl Page {
 // Do not derive Debug for types that can hold credentials or configuration.
 enum Command {
     Login { server: String, user: String, password: String, insecure: bool },
+    CompleteSetup(SetupCompleteRequest),
     Fetch(Page),
+    Panel,
+    SetPanel(bool, Option<String>),
     Approve(Uuid),
     Revoke(Uuid),
     PutAcl(String),
@@ -70,7 +76,11 @@ enum Command {
 }
 
 enum Reply {
-    LoggedIn,
+    LoggedIn(AccountUser),
+    SetupReady,
+    SetupCompleted,
+    Account(AccountUser),
+    Panel(Value),
     Overview(Overview),
     Nodes(Vec<NodeView>),
     Acl(AclView),
@@ -86,7 +96,8 @@ fn worker(rx: Receiver<Command>, tx: SyncSender<Reply>) {
         let _ = tx.send(Reply::Failed("Não foi possível iniciar o worker."));
         return;
     };
-    let mut connection: Option<(AdminClient, AdminSession)> = None;
+    let mut connection: Option<(AdminClient, AccountSession)> = None;
+    let mut bootstrap: Option<(AdminClient, SetupSession)> = None;
     while let Ok(command) = rx.recv() {
         let reply = runtime.block_on(async {
             // Also bound multi-call operations, independently of SDK timeouts.
@@ -106,17 +117,56 @@ fn worker(rx: Receiver<Command>, tx: SyncSender<Reply>) {
                         };
                         let client = AdminClient::with_options(&server, options)
                             .map_err(|_| "Servidor inválido: use HTTPS; HTTP overlay exige opt-in explícito.")?;
-                        let login = client.login(&user, &password).await;
-                        // Remove the owned password immediately after the request. No
-                        // guarantee of allocator-level zeroization is made by String.
+                        let required = client.setup_status().await
+                            .map_err(|_| "Não foi possível consultar setup. Verifique URL/TLS e versão do servidor.")?.required;
+                        if required {
+                            let login = client.setup_login(&user, &password).await;
+                            password.clear();
+                            let session = login.map_err(|_| "Bootstrap falhou. Use a credencial temporária configurada no servidor.")?;
+                            bootstrap = Some((client, session));
+                            return Ok(Reply::SetupReady);
+                        }
+                        let login = client.account_login(&user, &password).await;
+                        // String::clear does not guarantee allocator-level zeroization.
                         password.clear();
                         let session = login.map_err(|_| "Login falhou. Verifique servidor, credenciais e TLS.")?;
+                        let user = session.user().clone();
                         connection = Some((client, session));
-                        return Ok(Reply::LoggedIn);
+                        return Ok(Reply::LoggedIn(user));
+                    }
+                    Command::CompleteSetup(mut request) => {
+                        let (client, session) = bootstrap.as_ref().ok_or("Bootstrap expirou; saia e entre novamente.")?;
+                        let result = client.complete_setup(session, &request).await;
+                        request.admin.password.clear();
+                        if result.is_err() {
+                            request.user.password.clear();
+                            return Err("Setup falhou ou expirou. Se houve timeout, reconecte antes de repetir.");
+                        }
+                        let login = client.account_login(&request.user.username, &request.user.password).await;
+                        request.user.password.clear();
+                        let client = client.clone();
+                        bootstrap = None;
+                        match login {
+                            Ok(session) => {
+                                let user = session.user().clone();
+                                connection = Some((client, session));
+                                Ok(Reply::LoggedIn(user))
+                            }
+                            Err(_) => Ok(Reply::SetupCompleted),
+                        }
                     }
                     command => {
-                        let (client, session) = connection.as_ref().ok_or("Entre novamente para continuar.")?;
+                        let (client, account) = connection.as_ref().ok_or("Entre novamente para continuar.")?;
                         let failed = |_| "Requisição falhou; verifique conexão/permissões ou saia e entre novamente.";
+                        if account.user().role == AccountRole::User {
+                            return match command {
+                                Command::Fetch(Page::Overview) => Ok(Reply::Account(client.account_session(account).await.map_err(failed)?.user)),
+                                Command::Fetch(Page::Status) => Ok(Reply::Changed("Sessão de usuário: sem permissões administrativas.")),
+                                _ => Err("Esta ação requer uma conta administrativa."),
+                            };
+                        }
+                        let admin = account.as_admin().map_err(|_| "Conta sem permissão administrativa.")?;
+                        let session = &admin;
                         Ok(match command {
                             Command::Fetch(Page::Overview) => Reply::Overview(client.overview(session).await.map_err(failed)?),
                             Command::Fetch(Page::Nodes) => Reply::Nodes(client.nodes(session).await.map_err(failed)?),
@@ -152,7 +202,9 @@ fn worker(rx: Receiver<Command>, tx: SyncSender<Reply>) {
                                 client.set_extension_activation(session, &id, node, active).await.map_err(failed)?;
                                 Reply::Changed("Ativação atualizada. Enter recarrega configuração do nó.")
                             }
-                            Command::Login { .. } => unreachable!(),
+                            Command::Panel => Reply::Panel(client.control_panel(session).await.map_err(failed)?),
+                            Command::SetPanel(enabled, digest) => Reply::Panel(client.set_control_panel(session, enabled, digest.as_deref()).await.map_err(failed)?),
+                            Command::Login { .. } | Command::CompleteSetup(_) => unreachable!(),
                         })
                     }
                 }
@@ -169,7 +221,7 @@ fn worker(rx: Receiver<Command>, tx: SyncSender<Reply>) {
     }
     if let Some((client, session)) = connection {
         runtime.block_on(async {
-            let _ = tokio::time::timeout(Duration::from_secs(3), client.logout(&session)).await;
+            let _ = tokio::time::timeout(Duration::from_secs(3), client.account_logout(&session)).await;
         });
     }
     // A cancelled DNS lookup may still own a Tokio blocking task. Do not let
@@ -262,6 +314,9 @@ impl Confirmation {
 struct App {
     login: Login,
     authenticated: bool,
+    account: Option<AccountUser>,
+    setup: Option<SetupForm>,
+    panel: Option<Value>,
     busy: bool,
     page: Page,
     overview: Option<Overview>,
@@ -280,7 +335,7 @@ struct App {
 impl App {
     fn new(server: Option<String>) -> Self {
         Self {
-            login: Login::new(server), authenticated: false, busy: false, page: Page::Overview,
+            login: Login::new(server), authenticated: false, account: None, setup: None, panel: None, busy: false, page: Page::Overview,
             overview: None, nodes: Vec::new(), selected_node: 0, node_detail: false,
             acl: None, extensions: Vec::new(), selected_extension: 0, config: None,
             editor: None, confirm: None, status: VecDeque::new(), scroll: 0,
@@ -300,7 +355,20 @@ impl App {
     fn receive(&mut self, reply: Reply) {
         self.busy = false;
         match reply {
-            Reply::LoggedIn => { self.authenticated = true; self.login.password.clear(); self.note("Sessão aberta (somente memória)."); }
+            Reply::LoggedIn(user) => {
+                self.authenticated = true; self.setup = None; self.account = Some(user);
+                self.login.password.clear(); self.note("Sessão aberta (somente memória).");
+            }
+            Reply::SetupReady => {
+                self.setup = Some(SetupForm::default()); self.login.password.clear();
+                self.note("Bootstrap autenticado. Crie as duas contas definitivas.");
+            }
+            Reply::SetupCompleted => {
+                self.setup = None; self.login.password.clear(); self.login.user.clear();
+                self.note("Contas criadas; bootstrap invalidado. Entre com a conta de usuário.");
+            }
+            Reply::Account(user) => { self.account = Some(user); self.note("Sessão de usuário atualizada."); }
+            Reply::Panel(value) => { self.panel = Some(value); self.note("Estado do painel atualizado."); }
             Reply::Overview(value) => { self.overview = Some(value); self.note("Overview atualizado."); }
             Reply::Nodes(value) => { self.nodes = value; self.clamp_selection(); self.note("Nós atualizados."); }
             Reply::Acl(value) => { self.acl = Some(value); self.note("ACL atualizada."); }
@@ -333,7 +401,15 @@ impl App {
         self.editor = Editor::new(target, text);
         if self.editor.is_none() { self.note("Documento excede o limite do formulário (64 KiB)."); }
     }
+    fn is_user(&self) -> bool {
+        self.account.as_ref().is_some_and(|user| user.role == AccountRole::User)
+    }
     fn change_page(&mut self, page: Page, tx: &SyncSender<Command>) {
+        if self.is_user() && !matches!(page, Page::Overview | Page::Status) {
+            self.note("Conta comum: administração disponível somente para admin.");
+            return;
+        }
+        self.panel = None;
         self.page = page;
         self.scroll = 0;
         self.config = None;
@@ -354,6 +430,18 @@ impl App {
         }
         if self.editor.is_some() {
             self.editor_key(key);
+            return false;
+        }
+        if let Some(form) = self.setup.as_mut() {
+            match form.key(key) {
+                FormAction::Exit => return true,
+                FormAction::Submit(request) => self.confirm(
+                    "Criar admin e usuário definitivamente e INVALIDAR o bootstrap?".into(),
+                    Command::CompleteSetup(request),
+                ),
+                FormAction::Invalid => self.note("Use nomes distintos, senhas de 12+ caracteres e confirmações iguais."),
+                FormAction::None => {}
+            }
             return false;
         }
         if !self.authenticated {
@@ -386,11 +474,25 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Char(ch @ '1'..='5') => self.change_page(Page::at(ch as usize - '1' as usize), tx),
+            KeyCode::Tab | KeyCode::Right | KeyCode::BackTab | KeyCode::Left if self.is_user() => {
+                self.change_page(if self.page == Page::Overview { Page::Status } else { Page::Overview }, tx);
+            }
             KeyCode::Tab | KeyCode::Right => self.change_page(Page::at(self.page.index() + 1), tx),
             KeyCode::BackTab | KeyCode::Left => self.change_page(Page::at(self.page.index() + 4), tx),
-            KeyCode::Esc => { self.config = None; self.node_detail = false; self.scroll = 0; }
+            KeyCode::Esc => { self.config = None; self.panel = None; self.node_detail = false; self.scroll = 0; }
             KeyCode::PageDown => self.scroll = self.scroll.saturating_add(10),
             KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(10),
+            KeyCode::Char('p') if self.page == Page::Extensions => self.send(tx, Command::Panel),
+            KeyCode::Char('a') | KeyCode::Char('d') if self.page == Page::Extensions && self.panel.is_some() => {
+                let enabled = key.code == KeyCode::Char('a');
+                let digest = self.panel.as_ref().and_then(|panel| panel["digest"].as_str()).map(str::to_owned);
+                if enabled && digest.is_none() {
+                    self.note("Instale o pacote control_panel no servidor e atualize com r antes de ativar.");
+                } else {
+                    self.confirm(format!("{} painel React no servidor? Pacote confiado: {}", if enabled { "Ativar" } else { "Desativar" }, digest.as_deref().unwrap_or("nenhum")), Command::SetPanel(enabled, digest));
+                }
+            }
+            KeyCode::Char('r') if self.panel.is_some() => self.send(tx, Command::Panel),
             KeyCode::Char('r') => self.send(tx, Command::Fetch(self.page)),
             KeyCode::Down if self.page == Page::Nodes && !self.node_detail => {
                 self.selected_node = (self.selected_node + 1).min(self.nodes.len().saturating_sub(1));
@@ -505,7 +607,9 @@ fn node_label(node: &NodeView) -> String {
 fn render(frame: &mut Frame<'_>, app: &App) {
     let areas = Layout::default().direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)]).split(frame.area());
-    let title = if app.authenticated {
+    let title = if app.setup.is_some() { "WM — primeira configuração / bootstrap temporário".into() }
+    else if app.is_user() { "WM — conta de usuário | 1 Perfil | 5 Status | q sair".into() }
+    else if app.authenticated {
         ["1 Overview", "2 Nós", "3 Acessos (ACL)", "4 Extensões", "5 Logs/status"].iter().enumerate()
             .map(|(i, name)| if i == app.page.index() { format!("[{name}]") } else { name.to_string() })
             .collect::<Vec<_>>().join(" | ")
@@ -524,10 +628,15 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         let mut text = editor.text.clone();
         text.insert(editor.cursor, '▏');
         (format!("Editar {target} — contém dados sensíveis; somente memória\n{} / {} bytes\n\n{text}", editor.text.len(), MAX_FORM), "Ctrl+S validar/salvar | Esc descartar | F2 enabled | setas/Home/End editar".into())
+    } else if let Some(form) = &app.setup {
+        (form.body(), "Tab/↑/↓ campo | Enter validar/criar | Esc sair (sem concluir)".into())
     } else if !app.authenticated {
         let login = &app.login;
         let marker = |n| if login.field == n { ">" } else { " " };
         (format!("{} Servidor: {}\n{} Usuário: {}\n{} Senha: {}\n{} [{}] Permitir HTTP overlay inseguro\n\nServidor obrigatório: https://host[:porta].\nHTTP envia senha/sessão sem TLS: use somente em overlay confiável e marque opt-in.\nSem descoberta automática, sem persistência de credenciais.", marker(0), safe_text(&login.server), marker(1), safe_text(&login.user), marker(2), login.masked_password(), marker(3), if login.insecure { "x" } else { " " }), "Tab/↑/↓ campo | Espaço opt-in HTTP | Enter login | Esc sair".into())
+    } else if app.is_user() && app.page != Page::Status {
+        let name = app.account.as_ref().map(|user| safe_text(&user.username)).unwrap_or_default();
+        (format!("Conta: {name}\nPapel: usuário\n\nSessão pessoal ativa, sem privilégios de administração.\nA identidade dos nós e seus convites continuam separados desta conta.\nPara administrar nós/ACL/extensões, saia e entre com a conta admin.\nO painel React é opcional e permanece desativado por padrão."), "1 perfil | 5 status | r revalidar sessão | q sair".into())
     } else {
         match app.page {
             Page::Overview => (app.overview.as_ref().map(|value| json_text(&serde_json::to_value(value).unwrap_or(Value::Null))).unwrap_or_else(|| "r para obter overview do servidor autenticado.".into()), "Tab/←/→ navegar | 1–5 página | r atualizar | PgUp/PgDn rolar | q sair".into()),
@@ -543,7 +652,9 @@ fn render(frame: &mut Frame<'_>, app: &App) {
             }
             Page::Acl => (app.acl.as_ref().map(|value| json_text(&serde_json::to_value(value).unwrap_or(Value::Null))).unwrap_or_else(|| "r para obter política ACL.".into()), "e editar política JSON (não o envelope) | r atualizar | PgUp/PgDn rolar | q sair".into()),
             Page::Extensions => {
-                let text = if let Some((id, node, value)) = &app.config {
+                let text = if let Some(panel) = &app.panel {
+                    format!("Painel React opcional — servidor, NÃO nó\n{}\n\na ativar e confiar no digest mostrado | d desativar | r verificar pacote | Esc voltar", json_text(panel))
+                } else if let Some((id, node, value)) = &app.config {
                     format!("{} / {node}\n{}", safe_text(id), json_text(value))
                 } else {
                     let node = app.nodes.get(app.selected_node).map(node_label).unwrap_or_else(|| "Nenhum nó disponível".into());
@@ -551,7 +662,7 @@ fn render(frame: &mut Frame<'_>, app: &App) {
                     scroll = app.selected_extension.saturating_sub(areas[1].height.saturating_sub(7) as usize).min(u16::MAX as usize) as u16;
                     format!("Nó alvo (n próximo): {node}\n\n{rows}")
                 };
-                (text, "↑/↓ extensão | n próximo nó | Enter config | e editar | a ativar/d desativar | R reload | Esc voltar".into())
+                (text, "p painel do servidor | ↑/↓ extensão | n nó | Enter config | e editar | a ativar/d desativar | R reload | Esc voltar".into())
             }
             Page::Status => (format!("Status local da sessão (não é audit log remoto).\nO SDK não oferece endpoint de logs. Nenhum segredo/corpo de erro é registrado.\n\n{}", app.status.iter().copied().collect::<Vec<_>>().join("\n")), "PgUp/PgDn rolar | Tab navegar | q sair (logout remoto best-effort)".into()),
         }
@@ -612,7 +723,7 @@ pub(crate) fn run_with_tick(
             loop {
                 match replies.try_recv() {
                     Ok(reply) => {
-                        let logged_in = matches!(&reply, Reply::LoggedIn);
+                        let logged_in = matches!(&reply, Reply::LoggedIn(_));
                         app.receive(reply);
                         if logged_in { app.send(&commands, Command::Fetch(Page::Overview)); }
                     }
@@ -730,6 +841,25 @@ mod tests {
             _ => panic!("expected login command"),
         }
         assert!(app.status.iter().all(|message| !message.contains("unique-password")));
+    }
+    #[test]
+    fn ordinary_account_navigation_stays_on_profile_and_status() {
+        let mut app = App::new(None);
+        app.receive(Reply::LoggedIn(AccountUser {
+            id: Uuid::new_v4(), username: "daily".into(), role: AccountRole::User,
+        }));
+        let (tx, rx) = mpsc::sync_channel(1);
+        for forbidden in ['2', '3', '4', 'p', 'a', 'd'] {
+            assert!(!app.key(key(KeyCode::Char(forbidden)), &tx));
+            assert_eq!(app.page, Page::Overview);
+            assert!(rx.try_recv().is_err());
+        }
+        app.key(key(KeyCode::Tab), &tx);
+        assert_eq!(app.page, Page::Status);
+        assert!(rx.try_recv().is_err());
+        app.key(key(KeyCode::Tab), &tx);
+        assert_eq!(app.page, Page::Overview);
+        assert!(matches!(rx.try_recv(), Ok(Command::Fetch(Page::Overview))));
     }
     #[test]
     fn worker_queue_has_single_flight_semantics() {

@@ -530,7 +530,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     }
 }
 
-async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
+async fn run_host(mut args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
     let _instance = service::AgentLock::for_operation(&root, !args.no_agent)?;
     let control_dir = root.join("control");
     let agent_dir = root.clone();
@@ -545,7 +545,7 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
         tls_key: args.tls_key.clone(),
         data_dir: control_dir.clone(),
         approval_required: args.approval_required,
-        admin_password: args.admin_password.clone(),
+        admin_password: args.admin_password.take(),
         ..Default::default()
     };
     cfg.apply_env();
@@ -556,19 +556,32 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
 
     let listen = cfg.listen;
     let local_control_url = host_control_url(listen, cfg.tls_cert.is_some(), &public_url);
-    let cfg_for_server = cfg.clone();
-    let server = tokio::spawn(async move {
-        if let Err(err) = wm_control::server::run(cfg_for_server).await {
-            eprintln!("control plane parou: {err:#}");
-        }
-    });
+    let (state, _) = wm_control::state::AppState::new(cfg.clone()).await?;
+    cfg.admin_password = None;
+    cfg.bootstrap_username = None;
+    cfg.bootstrap_password = None;
+    cfg.bootstrap_password_file = None;
+    let pool = state.db.clone();
+    let server = tokio::spawn(wm_control::server::run_state(state));
     wait_for_port(listen).await?;
-
-    let pool = db::open(&cfg.db_path()).await?;
-    let admin = db::admin_by_username(&pool, "admin")
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("admin não encontrado após subir o control"))?;
-    let actor = format!("admin:{}", admin.username);
+    if args.no_agent {
+        return server.await.context("tarefa do control plane")?;
+    }
+    if db::setup_required(&pool).await? {
+        println!("control plane headless pronto: {public_url}");
+        println!("configure pela TUI: wm admin --server {public_url} tui");
+        println!("aguardando criar admin e usuário antes de inscrever o gateway local...");
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        while db::setup_required(&pool).await? {
+            if server.is_finished() {
+                return server.await.context("tarefa do control plane")?;
+            }
+            tick.tick().await;
+        }
+    }
+    // Local host enrollment is an explicit trusted operator operation, not a
+    // login as a fixed account named admin; setup allows arbitrary usernames.
+    let actor = "system:host".to_owned();
 
     let agent_cfg = AgentConfig {
         data_dir: agent_dir.clone(),
@@ -631,7 +644,8 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
         .map_err(|err| anyhow::anyhow!(err))?;
     println!();
     println!("  malha pronta: {public_url}");
-    println!("  painel:       {public_url}");
+    println!("  TUI remota:   wm admin --server {public_url} tui");
+    println!("  painel React: extensão opcional, desativada por padrão");
     println!();
     println!("  convite de um comando (1 uso):");
     println!("    curl -fsSL {public_url}/j/{quick} | sh");
@@ -645,10 +659,6 @@ async fn run_host(args: HostArgs, root: PathBuf) -> anyhow::Result<()> {
     println!("  GUI local deste nó: wm gui");
     println!();
 
-    if args.no_agent {
-        let _ = server.await;
-        return Ok(());
-    }
     let result = wm_core::run(agent_cfg).await;
     server.abort();
     result

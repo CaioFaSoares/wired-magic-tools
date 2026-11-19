@@ -49,7 +49,7 @@ const navGroups: NavGroup[] = [
     label: "Política",
     items: [
       { to: "/acl", label: "ACL", icon: ShieldCheck },
-      { to: "/relay", label: "Relay e STUN", icon: RadioTower },
+      { to: "/relay-status", label: "Relay e STUN", icon: RadioTower },
       { to: "/integration", label: "Integração", icon: Plug },
     ],
   },
@@ -73,7 +73,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   "/nodes": { section: "Rede", title: "Nós" },
   "/tokens": { section: "Rede", title: "Tokens de entrada" },
   "/acl": { section: "Política", title: "ACL" },
-  "/relay": { section: "Política", title: "Relay e STUN" },
+  "/relay-status": { section: "Política", title: "Relay e STUN" },
   "/integration": { section: "Política", title: "Integração" },
   "/audit": { section: "Sistema", title: "Auditoria" },
   "/settings": { section: "Sistema", title: "Configurações" },

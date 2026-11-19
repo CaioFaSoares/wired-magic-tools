@@ -72,6 +72,21 @@ async fn init_schema(pool: &SqlitePool) -> anyhow::Result<()> {
             password_hash TEXT NOT NULL,
             created_at INTEGER NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS account_setup (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            username TEXT,
+            password_hash TEXT,
+            consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed IN (0, 1))
+        )",
+        "CREATE TABLE IF NOT EXISTS setup_sessions (
+            token_hash TEXT PRIMARY KEY,
+            csrf_token TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+        )",
+        "CREATE TRIGGER IF NOT EXISTS account_setup_no_reopen
+         BEFORE UPDATE OF consumed ON account_setup
+         WHEN OLD.consumed = 1 AND NEW.consumed <> 1
+         BEGIN SELECT RAISE(ABORT, 'setup already consumed'); END",
         "CREATE TABLE IF NOT EXISTS admin_sessions (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -270,6 +285,16 @@ async fn init_schema(pool: &SqlitePool) -> anyhow::Result<()> {
     for stmt in stmts {
         sqlx::query(stmt).execute(pool).await?;
     }
+    // Older databases contain permanent admins only. Preserve their authority,
+    // and durably consume setup before considering any bootstrap environment.
+    ensure_column(pool, "admin_users", "role", "role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('admin', 'user'))").await?;
+    sqlx::query("INSERT OR IGNORE INTO account_setup(id, consumed) SELECT 1, 1 WHERE EXISTS (SELECT 1 FROM admin_users WHERE role = 'admin')")
+        .execute(pool).await?;
+    sqlx::query("UPDATE account_setup SET consumed = 1, username = NULL, password_hash = NULL WHERE id = 1 AND EXISTS (SELECT 1 FROM admin_users WHERE role = 'admin')")
+        .execute(pool).await?;
+    sqlx::query("DELETE FROM setup_sessions WHERE EXISTS (SELECT 1 FROM account_setup WHERE consumed = 1) OR expires_at <= ?")
+        .bind(now_ts()).execute(pool).await?;
+
     // The extension status table gained these columns during development.
     // Keep upgrades from a previous alpha data directory working.
     ensure_column(pool, "extension_status", "name", "name TEXT NOT NULL DEFAULT ''").await?;
@@ -325,37 +350,55 @@ pub async fn ensure_admin(
     username: &str,
     configured_password: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM admin_users")
-        .fetch_one(pool)
-        .await?;
-    if count.0 > 0 {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM admin_users WHERE role = 'admin'")
+        .fetch_one(pool).await?;
+    if count.0 > 0 || !setup_required(pool).await? {
         return Ok(None);
     }
-    let (password, generated) = match configured_password {
-        Some(p) if !p.is_empty() => (p.to_string(), false),
-        _ => (crate::auth::random_password(18), true),
-    };
-    let hash = crate::auth::hash_password(&password)?;
-    sqlx::query("INSERT INTO admin_users(id, username, password_hash, created_at) VALUES(?,?,?,?)")
-        .bind(Uuid::new_v4().to_string())
-        .bind(username)
-        .bind(hash)
-        .bind(now_ts())
-        .execute(pool)
-        .await?;
-    Ok(generated.then_some(password))
+    let password = configured_password.filter(|p| !p.is_empty() && p.len() <= 1024)
+        .ok_or_else(|| anyhow!("seed legado exige WM_ADMIN_PASSWORD explícita (1..=1024 bytes)"))?
+        .to_owned();
+    let hash = tokio::task::spawn_blocking(move || crate::auth::hash_password(&password)).await??;
+    let mut tx = pool.begin().await?;
+    // First statement takes the write lock; no read/upgrade race with setup.
+    let claimed = sqlx::query("INSERT OR IGNORE INTO account_setup(id, consumed) VALUES(1, 1)")
+        .execute(&mut *tx).await?.rows_affected();
+    if claimed == 0 {
+        bail!("bootstrap já inicializado; não trocar para seed legado");
+    }
+    sqlx::query("INSERT INTO admin_users(id, username, password_hash, created_at, role) VALUES(?,?,?,?, 'admin')")
+        .bind(Uuid::new_v4().to_string()).bind(username).bind(hash).bind(now_ts())
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(None)
 }
 
+/// Historical table/row name retained for compatibility; may also hold users.
+/// Deliberately no Debug because this row contains a password hash.
 pub struct AdminRow {
     pub id: String,
     pub username: String,
     pub password_hash: String,
     pub created_at: i64,
+    pub role: String,
 }
 
-impl_from_row!(AdminRow { id, username, password_hash, created_at });
+impl_from_row!(AdminRow { id, username, password_hash, created_at, role });
 
 impl AdminRow {
+    pub fn account(&self) -> anyhow::Result<wm_proto::AccountUser> {
+        let role = match self.role.as_str() {
+            "admin" => wm_proto::AccountRole::Admin,
+            "user" => wm_proto::AccountRole::User,
+            _ => bail!("role de conta inválida"),
+        };
+        Ok(wm_proto::AccountUser {
+            id: Uuid::parse_str(&self.id)?,
+            username: self.username.clone(),
+            role,
+        })
+    }
+
     pub fn uuid(&self) -> Uuid {
         Uuid::parse_str(&self.id).unwrap_or_else(|_| Uuid::new_v4())
     }
@@ -422,6 +465,22 @@ pub async fn create_admin_session(
     Ok(())
 }
 
+pub async fn create_account_session(
+    pool: &SqlitePool,
+    user: &AdminRow,
+    token_hash: &str,
+    csrf: &str,
+    ip: Option<&str>,
+    ua: Option<&str>,
+) -> anyhow::Result<bool> {
+    let changed = sqlx::query("INSERT INTO admin_sessions(id, user_id, token_hash, csrf_token, expires_at, created_at, ip, ua) SELECT ?, id, ?, ?, ?, ?, ?, ? FROM admin_users WHERE id = ? AND password_hash = ? AND role = ?")
+        .bind(Uuid::new_v4().to_string()).bind(token_hash).bind(csrf)
+        .bind(now_ts() + crate::auth::SESSION_TTL_SECS).bind(now_ts()).bind(ip).bind(ua)
+        .bind(&user.id).bind(&user.password_hash).bind(&user.role)
+        .execute(pool).await?.rows_affected();
+    Ok(changed == 1)
+}
+
 pub async fn session_by_hash(
     pool: &SqlitePool,
     token_hash: &str,
@@ -442,6 +501,95 @@ pub async fn delete_session(pool: &SqlitePool, id: &str) -> anyhow::Result<()> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// True until the two fresh accounts commit atomically. Legacy installations
+/// are marked consumed during schema migration, even if their users are deleted.
+pub async fn setup_required(pool: &SqlitePool) -> anyhow::Result<bool> {
+    let (required,): (bool,) = sqlx::query_as(
+        "SELECT NOT EXISTS (SELECT 1 FROM account_setup WHERE id = 1 AND consumed = 1)",
+    ).fetch_one(pool).await?;
+    Ok(required)
+}
+
+/// Bootstrap identity is not an account and can never authenticate to /admin.
+pub struct BootstrapRow {
+    pub username: String,
+    pub password_hash: String,
+}
+impl_from_row!(BootstrapRow { username, password_hash });
+
+pub async fn bootstrap(pool: &SqlitePool) -> anyhow::Result<Option<BootstrapRow>> {
+    Ok(sqlx::query_as("SELECT username, password_hash FROM account_setup WHERE id = 1 AND consumed = 0 AND username IS NOT NULL AND password_hash IS NOT NULL")
+        .fetch_optional(pool).await?)
+}
+
+/// Seed once only; a restart or competing initializer cannot replace this hash.
+pub async fn seed_bootstrap(pool: &SqlitePool, username: &str, hash: &str) -> anyhow::Result<()> {
+    sqlx::query("INSERT OR IGNORE INTO account_setup(id, username, password_hash, consumed) SELECT 1, ?, ?, 0 WHERE NOT EXISTS (SELECT 1 FROM admin_users WHERE role = 'admin')")
+        .bind(username).bind(hash).execute(pool).await?;
+    Ok(())
+}
+
+pub struct SetupSessionRow {
+    pub csrf_token: String,
+    pub expires_at: i64,
+}
+impl_from_row!(SetupSessionRow { csrf_token, expires_at });
+
+pub async fn setup_session_by_hash(pool: &SqlitePool, hash: &str) -> anyhow::Result<Option<SetupSessionRow>> {
+    Ok(sqlx::query_as("SELECT csrf_token, expires_at FROM setup_sessions WHERE token_hash = ? AND expires_at > ? AND EXISTS (SELECT 1 FROM account_setup WHERE id = 1 AND consumed = 0)")
+        .bind(hash).bind(now_ts()).fetch_optional(pool).await?)
+}
+
+/// Rechecks the immutable bootstrap hash after asynchronous password validation;
+/// concurrent completion cannot mint a new usable bootstrap session.
+pub async fn create_setup_session(
+    pool: &SqlitePool, verified_hash: &str, token_hash: &str, csrf: &str, ttl: i64,
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM setup_sessions WHERE expires_at <= ?")
+        .bind(now_ts()).execute(&mut *tx).await?;
+    let changed = sqlx::query("INSERT INTO setup_sessions(token_hash, csrf_token, expires_at) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM account_setup WHERE id = 1 AND consumed = 0 AND password_hash = ?)")
+        .bind(token_hash).bind(csrf).bind(now_ts() + ttl).bind(verified_hash)
+        .execute(&mut *tx).await?.rows_affected();
+    tx.commit().await?;
+    Ok(changed == 1)
+}
+
+/// The first statement acquires SQLite's write lock and claims the one-time
+/// marker only with a still-live session+CSRF. Any later failure rolls EVERYTHING
+/// back (including consumed and both accounts). Parallel losers return None.
+pub async fn complete_setup(
+    pool: &SqlitePool,
+    session_hash: &str,
+    csrf: &str,
+    admin_username: &str,
+    admin_hash: &str,
+    user_username: &str,
+    user_hash: &str,
+) -> anyhow::Result<Option<wm_proto::SetupCompleteResponse>> {
+    let mut tx = pool.begin().await?;
+    let claimed = sqlx::query("UPDATE account_setup SET consumed = 1, username = NULL, password_hash = NULL WHERE id = 1 AND consumed = 0 AND EXISTS (SELECT 1 FROM setup_sessions WHERE token_hash = ? AND csrf_token = ? AND expires_at > ?)")
+        .bind(session_hash).bind(csrf).bind(now_ts()).execute(&mut *tx).await?.rows_affected();
+    if claimed != 1 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    let admin = wm_proto::AccountUser {
+        id: Uuid::new_v4(), username: admin_username.to_owned(), role: wm_proto::AccountRole::Admin,
+    };
+    let user = wm_proto::AccountUser {
+        id: Uuid::new_v4(), username: user_username.to_owned(), role: wm_proto::AccountRole::User,
+    };
+    for (account, hash, role) in [(&admin, admin_hash, "admin"), (&user, user_hash, "user")] {
+        sqlx::query("INSERT INTO admin_users(id, username, password_hash, role, created_at) VALUES(?,?,?,?,?)")
+            .bind(account.id.to_string()).bind(&account.username).bind(hash).bind(role).bind(now_ts())
+            .execute(&mut *tx).await?;
+    }
+    sqlx::query("DELETE FROM setup_sessions").execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Some(wm_proto::SetupCompleteResponse { admin, user }))
 }
 
 pub struct JoinTokenRow {

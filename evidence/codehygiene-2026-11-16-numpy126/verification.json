@@ -1,0 +1,39 @@
+{
+  "verified_at": "2026-11-16T15:01:36.803531+00:00",
+  "all_scored_source_hashes_match": true,
+  "all_selected_files_scored": true,
+  "all_source_lines_window_covered": true,
+  "strict_json_without_nonfinite_constants": true,
+  "runner_tool_weights_hashes_match": true,
+  "summary_totals_match": true,
+  "sha256": {
+    "manifest.json": "d043690c529a9f880f453272cbd167bc5b4362780507d8945dba2e63dd6d9037",
+    "results.jsonl": "921c3345dc59cc6409542efdf368cd42e09a22512a66c30230c10476dcbce9ea",
+    "summary.json": "5b11899da1657e47a0bef213b8e670f44d3e406fa1e791a00fa4c7fef0ec603c"
+  },
+  "offline_tests": {
+    "command": [
+      "/Users/caio/_Nexus/valus/_Workspace/_projects/tools/wired-magic-tools/../codehygiene/.venv/bin/python",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "scripts",
+      "-p",
+      "test_*.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "test_accepts_finite_nested_output (test_audit_codehygiene.AuditGuards.test_accepts_finite_nested_output) ... ok\ntest_digest_is_sha256 (test_audit_codehygiene.AuditGuards.test_digest_is_sha256) ... ok\ntest_overlap_and_empty_contract (test_audit_codehygiene.AuditGuards.test_overlap_and_empty_contract) ... ok\ntest_rejects_nonfinite_nested_output (test_audit_codehygiene.AuditGuards.test_rejects_nonfinite_nested_output) ... ok\ntest_windows_cover_every_line (test_audit_codehygiene.AuditGuards.test_windows_cover_every_line) ... ok\ntest_bounded_command_failure_and_timeout (test_e2e_assert.Contracts.test_bounded_command_failure_and_timeout) ... ok\ntest_cli_rejects_malformed_json (test_e2e_assert.Contracts.test_cli_rejects_malformed_json) ... ok\ntest_named_paths_sabotage (test_e2e_assert.Contracts.test_named_paths_sabotage) ... ok\ntest_policy_sabotage (test_e2e_assert.Contracts.test_policy_sabotage) ... ok\ntest_probe_sabotage (test_e2e_assert.Contracts.test_probe_sabotage) ... ok\ntest_status (test_e2e_assert.Contracts.test_status) ... ok\ntest_formula_names_urls_and_real_hashes (test_homebrew_formula.FormulaTests.test_formula_names_urls_and_real_hashes) ... ok\ntest_monotonic_first_install_same_and_numeric_upgrade (test_homebrew_formula.FormulaTests.test_monotonic_first_install_same_and_numeric_upgrade) ... ok\ntest_monotonic_rejects_downgrade_and_unknown_existing (test_homebrew_formula.FormulaTests.test_monotonic_rejects_downgrade_and_unknown_existing) ... ok\ntest_reject_changed_checksum (test_homebrew_formula.FormulaTests.test_reject_changed_checksum) ... ok\ntest_reject_invalid_or_unmatched_arch_subsets (test_homebrew_formula.FormulaTests.test_reject_invalid_or_unmatched_arch_subsets) ... ok\ntest_reject_invalid_tags (test_homebrew_formula.FormulaTests.test_reject_invalid_tags) ... ok\ntest_reject_missing_architecture (test_homebrew_formula.FormulaTests.test_reject_missing_architecture) ... ok\ntest_reject_repository_injection (test_homebrew_formula.FormulaTests.test_reject_repository_injection) ... ok\ntest_reject_unsafe_archive (test_homebrew_formula.FormulaTests.test_reject_unsafe_archive) ... ok\ntest_single_arm_formula_refuses_intel (test_homebrew_formula.FormulaTests.test_single_arm_formula_refuses_intel) ... ok\ntest_single_intel_formula_refuses_arm (test_homebrew_formula.FormulaTests.test_single_intel_formula_refuses_arm) ... ok\n\n----------------------------------------------------------------------\nRan 22 tests in 0.149s\n\nOK\n"
+  },
+  "not_validated": [
+    "Rust test suite",
+    "frontend build/tests",
+    "Docker/TUN E2E",
+    "live exploit reproduction",
+    "WM CPU/RSS/idle/load metrics",
+    "CodeHygiene full browser rendering"
+  ]
+}

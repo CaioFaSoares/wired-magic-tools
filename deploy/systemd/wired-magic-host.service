@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
+# Root-owned mode 0600; required for fresh setup only. Remove secrets after TUI setup.
+EnvironmentFile=-/etc/wired-magic/bootstrap.env
 ExecStart=/usr/local/bin/wm host --public-url https://mesh.exemplo.com --listen 127.0.0.1:8080 --data-dir /var/lib/wired-magic
 Restart=always
 RestartSec=3

@@ -64,8 +64,8 @@ rotas do host.
 
 - Nenhum outro processo usando as portas UDP escolhidas (`WM_STUN_PORT` e `WM_UDP_PORT`,
   padrões `3478/udp` e `41641/udp`). Libere essas portas no firewall se alterar os padrões.
-- 2 vCPU e 2–4 GB de RAM são confortáveis para o build Rust + Web; em runtime o container usa
-  bem menos. O build acontece no servidor do Coolify.
+- O build Rust acontece no servidor do Coolify, com um job por padrão. Não inclui Node/React.
+  Consumo e duração dependem do builder/cache; não há garantia de CPU/RAM sem medição.
 
 ## 1. Variáveis de ambiente
 
@@ -74,7 +74,8 @@ No Coolify, crie o recurso e cadastre em **Environment Variables**:
 | Variável | Obrigatória | Exemplo | Observação |
 | --- | --- | --- | --- |
 | `WM_PUBLIC_URL` | sim | `https://mesh.exemplo.com` | URL pública **sem** `:8080` e sem barra no final; entra no painel, nos convites e nos tokens de relay |
-| `WM_ADMIN_PASSWORD` | sim | senha longa e única | só é aplicada no primeiro start; depois o hash fica no SQLite |
+| `WM_BOOTSTRAP_USERNAME` | volume novo | `setup` | conta temporária limitada ao setup pela TUI |
+| `WM_BOOTSTRAP_PASSWORD` | volume novo | senha longa e única | bootstrap invalidado ao criar admin + usuário; remova depois |
 | `WM_NODE_NAME` | não | `gateway` | nome do nó `.1` no painel; padrão `gateway` |
 | `WM_HTTP_PORT` | não | `8080` | porta HTTP interna; configure a mesma porta no proxy do Coolify |
 | `WM_STUN_PORT` | não | `3478` | porta STUN UDP, interna e externa iguais |
@@ -112,8 +113,8 @@ O endereço anunciado deve ser alcançável pelos clientes, nunca `0.0.0.0`.
 6. Cadastre as variáveis da seção anterior.
 7. Clique em **Deploy**.
 
-O Coolify vai construir a imagem a partir do `Dockerfile` da raiz (Web + Rust) e gerar as
-labels do Traefik para o domínio. O primeiro build costuma levar alguns minutos.
+O Coolify constrói a imagem Rust headless e gera as labels do Traefik para o domínio.
+Não há build Web obrigatório; o painel é um pacote opcional ativado posteriormente.
 
 ### Cache e builds locais
 
@@ -130,13 +131,12 @@ docker compose up -d --no-build
 ```
 
 - Mesmo commit: reutiliza as camadas completas.
-- Mudança no frontend: mantém a instalação de dependências se os manifests não mudaram.
-  Downloads pnpm ficam num cache persistente, inclusive quando o lockfile muda.
+- Mudança no frontend: não altera a imagem headless; gere e distribua o pacote opcional
+  separadamente (veja [painel opcional](control-panel.md)).
 - Mudança em Rust: caches de registry/git evitam baixar novamente; o cache de `target`
   reutiliza dependências compiladas, separado por arquitetura e versão de Rust.
-- `wm-control` é limpo no passo de compilação para garantir que `rust-embed` incorpore o
-  painel atualizado; suas dependências continuam em cache. O binário é copiado para fora do
-  mount antes de entrar na imagem final. Nenhum cache de build é incluído no runtime.
+- Não há `cargo clean` forçado nem assets React embutidos em `wm-control`. O binário é
+  copiado para fora do cache mount; nenhum cache de build é incluído no runtime.
 - Os caches pertencem ao **builder**, não ao volume `wm-data`: trocar o builder/servidor,
   garbage collection ou limpeza de cache no Coolify pode exigir downloads/build completos.
   `--no-cache` refaz camadas, mas **não esvazia** os cache mounts. Para uma medição realmente
@@ -148,9 +148,9 @@ O `.dockerignore` exclui builds locais, dependências, estado e arquivos `.env*`
 exemplo), evitando contextos enormes e envio acidental de segredos. Variáveis de runtime
 continuam sendo fornecidas pelo Compose/Coolify, não copiadas para a imagem.
 
-O nó gateway se inscreve sozinho no primeiro start (`WM_NODE_NAME`, padrão `gateway`) e
-reivindica `10.66.0.1`; não é preciso criar token para ele. Os tokens são para as outras
-máquinas.
+O HTTP/API sobe primeiro. Após concluir o setup pela TUI, o gateway se inscreve
+(`WM_NODE_NAME`, padrão `gateway`) e reivindica `10.66.0.1`. Não se exige token manual
+para o gateway; convites para outras máquinas só são emitidos após o setup.
 
 Se o repositório for privado, configure a deploy key no Coolify antes do deploy. O compose
 usa `build.context: .`; não é necessário publicar imagem em registry.
@@ -172,16 +172,24 @@ curl -fsS https://mesh.exemplo.com/api/v1/meta
 > Em versões antigas, `API 503: no available server` no cadastro podia impedir o startup:
 > atualize e reconstrua a imagem; não é necessário apagar o volume.
 
-Abra `https://mesh.exemplo.com` e entre com:
+A raiz HTTP é headless, não uma tela React. No seu computador, abra:
 
-- usuário: `admin`
-- senha: a que você definiu em `WM_ADMIN_PASSWORD`
+```sh
+wm admin --server https://mesh.exemplo.com tui
+```
 
-O painel mostra nós, convites, ACL, relay/STUN, integração, auditoria e extensões.
+Entre com `WM_BOOTSTRAP_USERNAME` / `WM_BOOTSTRAP_PASSWORD`; crie a conta admin
+permanente e a conta de usuário cotidiano. Confirme com `y`. O bootstrap é
+invalidado definitivamente; a TUI entra como usuário. Saia e entre como admin
+quando precisar administrar. Remova as variáveis bootstrap no Coolify depois,
+sem apagar o volume. Reinícios preservam as contas e não reabrem setup.
 
-> Se `WM_ADMIN_PASSWORD` não for definida, o processo sorteia uma senha e a imprime **uma vez**
-> no log do primeiro start. O compose exige a variável justamente para evitar perder esse
-> acesso. Trocar a variável depois não muda a senha já gravada.
+Não há senha automática nos logs. Banco novo sem bootstrap falha fechado.
+Bancos antigos mantêm admins existentes; `WM_ADMIN_PASSWORD` só permanece como
+compatibilidade explícita legada, não é o caminho recomendado para servidores novos.
+
+O painel React pode ser instalado e ativado depois pela TUI admin, sem reconstruir
+o servidor; veja [painel opcional](control-panel.md) e [primeiro acesso](remote-admin.md).
 
 ## 4. Conectar as máquinas
 
@@ -189,7 +197,9 @@ Há dois caminhos; o convite de um comando só funciona quando o host serve o bi
 
 ### 4.1 Convite pela interface
 
-No painel, abra **Tokens** e crie um convite com:
+Após concluir o setup, use o convite inicial mostrado pelo host ou a CLI admin
+para criar outros convites (consulte `wm admin --help`). Se optar por instalar e
+ativar o [painel opcional](control-panel.md), abra **Tokens** e crie um convite com:
 
 - nome/descrição para identificar a máquina;
 - TTL curto (por exemplo, 1 h);
@@ -322,9 +332,11 @@ cada nó ou ajustar o estado com o agente parado. Planeje o domínio antes de di
 
 ### Redefinir a senha
 
-Não há CLI de reset nesta versão. A senha só é definida no primeiro start com
-`WM_ADMIN_PASSWORD`; se ela foi perdida, resta restaurar um backup ou recriar o volume (o que
-invalida nós e tokens). Guarde a senha no gerenciador de segredos do Coolify.
+Não há CLI de reset nesta versão. As senhas permanentes são escolhidas no setup;
+recolocar variáveis bootstrap ou `WM_ADMIN_PASSWORD` **não** troca senhas e não reabre
+setup. Guarde as contas permanentes no seu gerenciador de senhas. Em caso de perda,
+recupere um backup apropriado ou planeje recriar o volume (perdendo nós/tokens);
+nunca apague dados para tentar um reset sem avaliar esse impacto.
 
 ## 7. A VPS como nó de verdade (opcional)
 
@@ -352,7 +364,7 @@ compile no alvo; o `docker cp` só funciona quando as arquiteturas batem.
 
 | Sintoma | Causa provável | Ação |
 | --- | --- | --- |
-| Deploy falha por `WM_PUBLIC_URL`/`WM_ADMIN_PASSWORD` vazio | variável não cadastrada no Coolify | preencha Environment Variables e faça deploy |
+| Deploy falha por `WM_PUBLIC_URL` vazio ou erro de bootstrap | URL ausente ou banco novo sem credenciais temporárias | preencha `WM_PUBLIC_URL` e `WM_BOOTSTRAP_USERNAME` + senha/arquivo no Coolify; não combine com seed legado |
 | Container reinicia com erro de TUN | `/dev/net/tun` ausente ou sem permissão | `ls -l /dev/net/tun`, `modprobe tun`; confira `devices`/`cap_add` |
 | `operation not permitted` ao criar `wm0` | capability insuficiente no Docker | mantenha `NET_ADMIN`; em último caso, `privileged: true` (evite em produção) |
 | `502` no domínio | proxy apontando para a porta errada ou container unhealthy | use `WM_HTTP_PORT` no domínio/proxy (padrão `...:8080`); veja healthcheck e logs |
@@ -385,13 +397,14 @@ contém chaves e o banco; apague conscientemente.
 
 ## 10. Status de validação
 
-As validações de runtime abaixo são anteriores à otimização dos caches de build. Antes de
-promover, valide o build completo, a atualização do painel embutido e a reutilização dos caches
-no builder do deploy.
+A versão headless/bootstrap foi validada localmente com testes Rust serializados e
+smoke HTTP do binário real: setup por env, CSRF, roles, invalidação/restart, APIs de
+nós/ACL e instalação/ativação/desativação/persistência do painel com fixture estática.
+O React real no navegador e os builds Docker/CI não foram executados nesta refatoração.
 
-O caminho foi exercitado localmente em Docker Desktop (Linux `arm64`) com o compose deste
-repositório: build da imagem, healthcheck, login no painel, criação de convite, inscrição de um
-segundo nó, caminho `direct`, caminho `relay` forçado, parada graciosa com reinício e
-persistência do volume. **Não** foi executado em uma instalação real de Coolify, nem validou
-TLS/ACME, firewall externo, NAT de operadora ou uma VPS x86_64. Trate o deploy como alpha, como
-o restante do projeto.
+Uma versão anterior foi exercitada em Docker Desktop Linux `arm64` (imagem,
+healthcheck, painel, convites, segundo nó, caminhos direct/relay e volume persistente).
+Isso **não** valida automaticamente esta versão: antes de promover, teste no builder
+real a imagem headless, bootstrap pela TUI, persistência do volume, pacote opcional e
+reutilização dos caches. Não houve validação em Coolify real, TLS/ACME, firewall
+externo, NAT de operadora ou VPS x86_64. Trate o deploy como alpha.

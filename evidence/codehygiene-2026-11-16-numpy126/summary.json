@@ -1,0 +1,171 @@
+{
+  "files_selected": 151,
+  "files_scored": 151,
+  "source_lines": 54985,
+  "windows": 339,
+  "signals": 3031,
+  "signal_kinds": {
+    "deep_nesting": 1635,
+    "poor_naming": 180,
+    "dense_line": 596,
+    "cramped_layout": 570,
+    "noisy_comment": 7,
+    "duplicate_block": 20,
+    "swallowed_error": 11,
+    "special_casing": 12
+  },
+  "errors": [],
+  "elapsed_seconds": 27.56,
+  "most_signals": [
+    {
+      "path": "crates/wm-tui/src/lib.rs",
+      "lines": 2881,
+      "signals": 245,
+      "window_score_mean": 0.318
+    },
+    {
+      "path": "web/src/pages/CloudflarePage.tsx",
+      "lines": 882,
+      "signals": 152,
+      "window_score_mean": 0.3047
+    },
+    {
+      "path": "crates/wm-tui/src/ui.rs",
+      "lines": 3002,
+      "signals": 147,
+      "window_score_mean": 0.3709
+    },
+    {
+      "path": "crates/wm-tui/src/remote_admin.rs",
+      "lines": 768,
+      "signals": 134,
+      "window_score_mean": 0.0661
+    },
+    {
+      "path": "crates/wm-tui/src/actions.rs",
+      "lines": 1812,
+      "signals": 126,
+      "window_score_mean": 0.41
+    },
+    {
+      "path": "crates/wm/src/main.rs",
+      "lines": 1488,
+      "signals": 102,
+      "window_score_mean": 0.488
+    },
+    {
+      "path": "web/src/pages/TokensPage.tsx",
+      "lines": 537,
+      "signals": 98,
+      "window_score_mean": 0.2119
+    },
+    {
+      "path": "crates/wm-core/src/extensions/cloudflared.rs",
+      "lines": 558,
+      "signals": 89,
+      "window_score_mean": 0.1096
+    },
+    {
+      "path": "web/src/pages/IntegrationPage.tsx",
+      "lines": 629,
+      "signals": 88,
+      "window_score_mean": 0.2691
+    },
+    {
+      "path": "crates/wm-core/src/agent.rs",
+      "lines": 1437,
+      "signals": 77,
+      "window_score_mean": 0.5119
+    },
+    {
+      "path": "crates/wm-ext/src/admin.rs",
+      "lines": 401,
+      "signals": 74,
+      "window_score_mean": 0.0088
+    },
+    {
+      "path": "crates/wm/src/desktop.rs",
+      "lines": 414,
+      "signals": 69,
+      "window_score_mean": 0.0706
+    },
+    {
+      "path": "web/src/pages/ExtensionDetailPage.tsx",
+      "lines": 445,
+      "signals": 69,
+      "window_score_mean": 0.4287
+    },
+    {
+      "path": "crates/wm-tui/src/extension_ui.rs",
+      "lines": 364,
+      "signals": 62,
+      "window_score_mean": 0.0549
+    },
+    {
+      "path": "crates/wm-core/src/relay_client.rs",
+      "lines": 151,
+      "signals": 61,
+      "window_score_mean": 0.0135
+    },
+    {
+      "path": "web/src/pages/OverviewPage.tsx",
+      "lines": 428,
+      "signals": 61,
+      "window_score_mean": 0.4164
+    },
+    {
+      "path": "crates/wm-control/src/extensions/store.rs",
+      "lines": 991,
+      "signals": 59,
+      "window_score_mean": 0.2546
+    },
+    {
+      "path": "crates/wm/src/discovery.rs",
+      "lines": 599,
+      "signals": 58,
+      "window_score_mean": 0.3478
+    },
+    {
+      "path": "web/src/pages/NodesPage.tsx",
+      "lines": 1138,
+      "signals": 57,
+      "window_score_mean": 0.5142
+    },
+    {
+      "path": "web/src/pages/RelayPage.tsx",
+      "lines": 341,
+      "signals": 54,
+      "window_score_mean": 0.124
+    },
+    {
+      "path": "crates/wm-control/src/db.rs",
+      "lines": 1677,
+      "signals": 51,
+      "window_score_mean": 0.4245
+    },
+    {
+      "path": "web/src/pages/AclPage.tsx",
+      "lines": 633,
+      "signals": 50,
+      "window_score_mean": 0.4041
+    },
+    {
+      "path": "crates/wm-control/src/extensions/adapters.rs",
+      "lines": 264,
+      "signals": 48,
+      "window_score_mean": 0.4919
+    },
+    {
+      "path": "crates/wm-control/src/extensions/mod.rs",
+      "lines": 963,
+      "signals": 46,
+      "window_score_mean": 0.647
+    },
+    {
+      "path": "crates/wm-tui/src/app.rs",
+      "lines": 1740,
+      "signals": 39,
+      "window_score_mean": 0.59
+    }
+  ]
+}

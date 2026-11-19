@@ -1,0 +1,171 @@
+{
+  "files_selected": 151,
+  "files_scored": 151,
+  "source_lines": 54985,
+  "windows": 339,
+  "signals": 56626,
+  "signal_kinds": {
+    "swallowed_error": 4901,
+    "deep_nesting": 48271,
+    "noisy_comment": 890,
+    "special_casing": 752,
+    "poor_naming": 945,
+    "duplicate_block": 317,
+    "cramped_layout": 456,
+    "dense_line": 94
+  },
+  "errors": [],
+  "elapsed_seconds": 27.43,
+  "most_signals": [
+    {
+      "path": "crates/wm-tui/src/lib.rs",
+      "lines": 2881,
+      "signals": 3411,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-tui/src/ui.rs",
+      "lines": 3002,
+      "signals": 3002,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-tui/src/actions.rs",
+      "lines": 1812,
+      "signals": 1888,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-tui/src/app.rs",
+      "lines": 1740,
+      "signals": 1844,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-control/src/db.rs",
+      "lines": 1677,
+      "signals": 1737,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-core/src/agent.rs",
+      "lines": 1437,
+      "signals": 1663,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm/src/main.rs",
+      "lines": 1488,
+      "signals": 1570,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-proto/src/lib.rs",
+      "lines": 1374,
+      "signals": 1374,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "web/src/pages/NodesPage.tsx",
+      "lines": 1138,
+      "signals": 1138,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-control/src/extensions/store.rs",
+      "lines": 991,
+      "signals": 1115,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-control/src/extensions/mod.rs",
+      "lines": 963,
+      "signals": 1087,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm/src/packages.rs",
+      "lines": 1053,
+      "signals": 1053,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "web/src/lib/mock.ts",
+      "lines": 924,
+      "signals": 924,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-tui/src/remote_admin.rs",
+      "lines": 768,
+      "signals": 908,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-ext/src/manifest.rs",
+      "lines": 797,
+      "signals": 903,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "web/src/pages/CloudflarePage.tsx",
+      "lines": 882,
+      "signals": 882,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-control/src/api/admin.rs",
+      "lines": 783,
+      "signals": 850,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-control/src/extensions/cloudflared.rs",
+      "lines": 789,
+      "signals": 808,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-tui/src/agent.rs",
+      "lines": 801,
+      "signals": 801,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-control/tests/extensions_api.rs",
+      "lines": 666,
+      "signals": 721,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm/src/gui.rs",
+      "lines": 601,
+      "signals": 654,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "web/src/pages/AclPage.tsx",
+      "lines": 633,
+      "signals": 633,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "web/src/pages/IntegrationPage.tsx",
+      "lines": 629,
+      "signals": 629,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm-core/src/extensions/mod.rs",
+      "lines": 624,
+      "signals": 624,
+      "window_score_mean": NaN
+    },
+    {
+      "path": "crates/wm/src/discovery.rs",
+      "lines": 599,
+      "signals": 599,
+      "window_score_mean": NaN
+    }
+  ]
+}

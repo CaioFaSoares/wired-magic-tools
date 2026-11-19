@@ -105,10 +105,16 @@ o caminho mais curto é o [deploy de um compose no Coolify](docs/DEPLOY-COOLIFY.
 sudo wm host --public-url https://mesh.seudominio.com
 ```
 
-O primeiro start imprime a senha do `admin`, um convite de instalação em um comando e um
-**código `wmc_...` de uso único**. É esse código que você manda para o amigo. O convite rápido
-vale um uso: mande o código `wmc_` **ou** o comando `curl`, não os dois. Para criar outros
-convites, abra o painel do host, entre como `admin` e use **Tokens**.
+Antes do primeiro start, configure `WM_BOOTSTRAP_USERNAME` e `WM_BOOTSTRAP_PASSWORD`
+(ou `WM_BOOTSTRAP_PASSWORD_FILE`) no ambiente do serviço. Nenhuma senha é impressa.
+Pela sua TUI, acesse `wm admin --server https://mesh.seudominio.com tui`, entre com essa
+credencial temporária e crie **admin definitivo + usuário cotidiano**. O bootstrap é
+invalidado permanentemente; remova as variáveis após concluir. Veja [primeiro acesso](docs/remote-admin.md).
+
+Só após o setup o host inscreve o gateway e imprime um convite de instalação e um
+**código `wmc_...` de uso único**. Mande o código **ou** o comando `curl`, não os dois.
+Administre pela TUI/CLI. O [painel React](docs/control-panel.md) é uma extensão opcional,
+instalada e ativada depois, não uma dependência do servidor nem do build padrão.
 
 > O host precisa de TLS na frente (Caddy, proxy do Coolify ou `--tls-cert`/`--tls-key`). Para
 > LAN/dev, `--listen 0.0.0.0:8080 --public-url http://192.168.0.10:8080` funciona, mas não

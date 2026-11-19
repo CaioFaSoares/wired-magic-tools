@@ -20,7 +20,7 @@ use wm_proto::{
     SimulateResponse, UpdateNodeRequest,
 };
 
-use super::{AdminAuth, ApiErr, client_ip, client_ua};
+use super::{AdminAuth, ApiErr, client_ip};
 use crate::acl;
 use crate::auth;
 use crate::db;
@@ -33,44 +33,9 @@ pub async fn login(
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Response, ApiErr> {
+    let admin = super::accounts::authenticate(&state, &headers, req, true).await?;
+    let (session_token, csrf) = super::accounts::issue_session(&state, &headers, &admin).await?;
     let ip = client_ip(&headers).unwrap_or_else(|| "unknown".into());
-    if !state.login_limiter.allow(&ip) {
-        return Err(ApiErr::too_many("muitas tentativas de login"));
-    }
-    let Some(admin) = db::admin_by_username(&state.db, req.username.trim()).await? else {
-        return Err(ApiErr::unauthorized(
-            "invalid_credentials",
-            "usuário ou senha inválidos",
-        ));
-    };
-    if !auth::verify_password(&req.password, &admin.password_hash) {
-        db::audit(
-            &state.db,
-            &format!("login:{ip}"),
-            "admin.login_failed",
-            &req.username,
-            None,
-            Some(&ip),
-        )
-        .await
-        .ok();
-        return Err(ApiErr::unauthorized(
-            "invalid_credentials",
-            "usuário ou senha inválidos",
-        ));
-    }
-    let session_token = auth::random_token("wmsess_")?;
-    let csrf = auth::random_token("wmcsrf_")?;
-    db::create_admin_session(
-        &state.db,
-        &admin.id,
-        &auth::hash_token(&session_token),
-        &csrf,
-        auth::SESSION_TTL_SECS,
-        Some(&ip),
-        client_ua(&headers).as_deref(),
-    )
-    .await?;
     db::audit(
         &state.db,
         &format!("admin:{}", admin.username),

@@ -19,3 +19,6 @@ extensions/.debug-discovery.json
 extensions/.packages.json
 extensions/.packages.json.tmp
 extensions/.sources/
+
+# Estado local de ferramentas de edição/agente.
+.omp/

@@ -14,6 +14,12 @@ use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod accounts;
+pub use accounts::{
+    AccountCredentials, AccountLoginResponse, AccountRole, AccountUser, SetupCompleteRequest,
+    SetupCompleteResponse, SetupLoginResponse, SetupStatus,
+};
+
 pub mod share;
 pub use share::{
     AdminCreateShareRequest, CONNECT_CODE_PREFIX, CreateShareRequest, RenameSelfRequest, ShareInfo,
@@ -719,10 +725,19 @@ pub struct AdminUser {
     pub username: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+}
+
+impl fmt::Debug for LoginRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoginRequest")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

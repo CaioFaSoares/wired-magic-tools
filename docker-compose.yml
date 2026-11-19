@@ -7,7 +7,8 @@
 # Variáveis obrigatórias (configure no Coolify em Environment Variables, ou
 # copie .env.example para .env num teste local):
 #   WM_PUBLIC_URL      URL pública, sem :8080 — ex.: https://mesh.exemplo.com
-#   WM_ADMIN_PASSWORD  senha inicial do admin (só vale no primeiro start)
+#   WM_BOOTSTRAP_USERNAME / WM_BOOTSTRAP_PASSWORD  credencial temporária do setup
+#   (obrigatórias apenas para volume novo; remova após concluir pela TUI)
 #
 # Opcional:
 #   WM_NODE_NAME       nome do nó gateway no painel (padrão: gateway)
@@ -20,7 +21,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # BuildKit mantém caches de pnpm/Cargo no builder do host do Coolify.
+      # BuildKit mantém caches Cargo no builder; não há etapa Node/React.
       # Sem cache_to/cache_from remoto ou dependência de docker compose watch.
       target: runtime
     restart: unless-stopped
@@ -45,7 +46,8 @@ services:
 
     environment:
       WM_PUBLIC_URL: ${WM_PUBLIC_URL}
-      WM_ADMIN_PASSWORD: ${WM_ADMIN_PASSWORD:?defina WM_ADMIN_PASSWORD para o primeiro start}
+      WM_BOOTSTRAP_USERNAME: ${WM_BOOTSTRAP_USERNAME:-}
+      WM_BOOTSTRAP_PASSWORD: ${WM_BOOTSTRAP_PASSWORD:-}
       WM_DATA_DIR: /data
       WM_LOG: ${WM_LOG:-info}
 

@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod admin;
 pub mod install;
 pub mod integration;
@@ -64,18 +65,11 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let cookie = auth::parse_cookie(&parts.headers, auth::SESSION_COOKIE)
-            .ok_or_else(|| ApiErr::unauthorized("not_authenticated", "sessão ausente"))?;
-        let hash = auth::hash_token(&cookie);
-        let session = db::session_by_hash(&state.db, &hash)
-            .await
-            .map_err(ApiErr::from)?
-            .ok_or_else(|| ApiErr::unauthorized("session_expired", "sessão expirada"))?;
-        let admin = db::admin_by_id(&state.db, &session.user_id)
-            .await
-            .map_err(ApiErr::from)?
-            .ok_or_else(|| ApiErr::unauthorized("not_authenticated", "admin não encontrado"))?;
-        Ok(Self { admin, session })
+        let account = accounts::AccountAuth::from_request_parts(parts, state).await?;
+        if account.user.role != "admin" {
+            return Err(ApiErr::forbidden("admin_required", "conta administrativa exigida"));
+        }
+        Ok(Self { admin: account.user, session: account.session })
     }
 }
 
@@ -246,6 +240,12 @@ pub fn client_ua(headers: &HeaderMap) -> Option<String> {
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/meta", get(meta))
+        .route("/setup", get(accounts::setup_status))
+        .route("/setup/login", post(accounts::setup_login))
+        .route("/setup/complete", post(accounts::setup_complete))
+        .route("/auth/login", post(accounts::login))
+        .route("/auth/session", get(accounts::session))
+        .route("/auth/logout", post(accounts::logout))
         .route("/enroll", post(node::enroll))
         .route("/map", get(node::map))
         .route("/node/endpoints", post(node::endpoints))
@@ -358,9 +358,8 @@ async fn security_headers(
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     headers.insert("referrer-policy", "no-referrer".parse().unwrap());
-    headers.insert(
-        "content-security-policy",
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+    headers.entry("content-security-policy").or_insert(
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; form-action 'self'"
             .parse()
             .unwrap(),
     );

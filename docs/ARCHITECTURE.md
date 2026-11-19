@@ -5,7 +5,7 @@
 ```text
                         ┌──────────────────────────────┐
                         │ wm host (VPS, nó .1)          │
-                        │  axum: /api/v1 + SPA + /relay │
+                        │ axum: /api/v1 + /relay        │
                         │  SQLite: nós/tokens/ACL/audit │
                         │  STUN UDP 3478                │
                         │  agente embutido: TUN .1      │
@@ -34,7 +34,7 @@ userspace no espaço do usuário, com um TUN/utun por nó.
 | Agente | `wm-core` | boringtun, TUN, rotas, STUN client, candidatos, relay client, API local |
 | TUI | `wm-tui` | console do membro; onboarding, agente destacado, shares, console, mouse/atalhos e sessão persistente |
 | CLI | `wm` | host/join/up/down/serve/tui/doctor/service |
-| Front | `web/` | painel React embutido no binário via `rust-embed` |
+| Front opcional | `web/` | pacote `control_panel` separado, instalado e ativado por admin em runtime; nenhum build/asset React obrigatório no servidor |
 
 ## 3. Identidade e matrícula
 
@@ -43,7 +43,14 @@ userspace no espaço do usuário, com um TUN/utun por nó.
 - O control guarda só a pública, o IP e metadados. Um token de nó opaco
   (`wmn_...`, hash SHA-256 no banco) autentica as chamadas seguintes.
 - Join tokens (`wmj_...`) têm TTL, limite de usos e tags; são consumidos no enroll.
-- Admin único: senha argon2id + sessão cookie HttpOnly/SameSite=Lax + CSRF.
+- Contas humanas: roles `admin`/`user`, senha argon2id + cookie HttpOnly/SameSite=Lax +
+  CSRF. Conta humana não é nó e usuário comum não recebe privilégios administrativos.
+- Servidor novo: credencial bootstrap via env, sessão `wm_setup` de 10 minutos e
+  criação atômica de admin + usuário pela TUI. Conclusão consome setup e revoga todas
+  as sessões bootstrap; reinício não reabre. [Setup](remote-admin.md).
+- Painel React é [extensão opcional do servidor](control-panel.md), sem Node ou
+  assets no build padrão; confiança por digest, snapshot verificado em memória e
+  entrega bloqueada durante setup. JavaScript same-origin é código confiável, não sandbox.
 - Relay tokens são assinados com Ed25519 do control e têm audiência = URL do relay.
 
 ## 4. Mapa e presença

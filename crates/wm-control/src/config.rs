@@ -10,7 +10,7 @@ use wm_proto::{
 };
 
 /// Configuration for the control plane (`wm host` / `wm serve`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlConfig {
     /// Address the HTTP/TLS listener binds to.
@@ -36,8 +36,25 @@ pub struct ControlConfig {
     pub stun_listen: SocketAddr,
     /// STUN URLs advertised to agents. Defaults to `<public host>:<stun_listen port>`.
     pub stun_urls: Vec<String>,
-    /// Initial admin password. When unset a random one is printed once.
+    /// Deprecated explicit permanent admin seed. Never generated implicitly.
     pub admin_password: Option<String>,
+    /// One-time setup identity; never a permanent admin account.
+    pub bootstrap_username: Option<String>,
+    pub bootstrap_password: Option<String>,
+    /// Read only when seeding a fresh DB, never after setup has been consumed.
+    pub bootstrap_password_file: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for ControlConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlConfig")
+            .field("listen", &self.listen)
+            .field("public_url", &self.public_url)
+            .field("data_dir", &self.data_dir)
+            .field("admin_password", &"[REDACTED]")
+            .field("bootstrap_password", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for ControlConfig {
@@ -60,6 +77,9 @@ impl Default for ControlConfig {
             stun_listen: SocketAddr::from(([0, 0, 0, 0], DEFAULT_STUN_PORT)),
             stun_urls: Vec::new(),
             admin_password: None,
+            bootstrap_username: None,
+            bootstrap_password: None,
+            bootstrap_password_file: None,
         }
     }
 }
@@ -89,6 +109,15 @@ impl ControlConfig {
         }
         if let Ok(v) = std::env::var("WM_ADMIN_PASSWORD") {
             self.admin_password = Some(v);
+        }
+        if let Ok(v) = std::env::var("WM_BOOTSTRAP_USERNAME") {
+            self.bootstrap_username = Some(v);
+        }
+        if let Ok(v) = std::env::var("WM_BOOTSTRAP_PASSWORD") {
+            self.bootstrap_password = Some(v);
+        }
+        if let Ok(v) = std::env::var("WM_BOOTSTRAP_PASSWORD_FILE") {
+            self.bootstrap_password_file = Some(PathBuf::from(v));
         }
         if let Ok(v) = std::env::var("WM_TLS_CERT") {
             self.tls_cert = Some(PathBuf::from(v));

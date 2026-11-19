@@ -3,6 +3,7 @@
 import argparse
 import base64
 import http.client
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ def check(condition, label):
         raise Failure(label)
 
 
-def run(binary, startup_timeout):
+def run(binary, startup_timeout, host_no_agent=False):
     root = Path(__file__).resolve().parents[1]
     binary = binary.resolve()
     check(binary.is_file() and os.access(binary, os.X_OK),
@@ -34,9 +35,8 @@ def run(binary, startup_timeout):
     sources = [root / "Cargo.toml", root / "Cargo.lock"]
     sources += list((root / "crates").rglob("*.rs"))
     sources += list((root / "crates").rglob("Cargo.toml"))
-    sources += [p for p in (root / "web" / "dist").rglob("*") if p.is_file()]
     newer = sum(p.stat().st_mtime > binary.stat().st_mtime for p in sources if p.exists())
-    print(f"Binário: {binary.name}; fontes/assets mais recentes: {newer}")
+    print(f"Binário: {binary.name}; fontes Rust mais recentes: {newer}")
     if newer:
         print("AVISO: reconstrua com cargo build -p wired-magic; este resultado vale apenas para o binário existente.")
     temporary = Path(tempfile.mkdtemp(prefix="wm-smoke-" )).resolve()
@@ -54,16 +54,43 @@ def run(binary, startup_timeout):
         config.write_text(
             f'listen = "127.0.0.1:{port}"\npublic_url = "http://127.0.0.1:{port}"\n'
             f'data_dir = {json.dumps(str(temporary / "data"))}\n'
-            f'admin_password = {json.dumps(password)}\napproval_required = true\n'
+            'approval_required = true\n'
             'stun_enabled = false\nstun_listen = "127.0.0.1:0"\nrelay_enabled = false\n',
             encoding="utf-8")
         config.chmod(0o600)
         environment = {k: v for k, v in os.environ.items()
                        if not k.startswith("WM_") and k not in ("RUST_LOG", "RUST_BACKTRACE")}
         environment["RUST_LOG"] = "off"
-        process = subprocess.Popen([str(binary), "serve", "--config", str(config)],
-                                   cwd=temporary, env=environment, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        bootstrap_password = secrets.token_urlsafe(32)
+        user_password = secrets.token_urlsafe(32)
+        environment["WM_BOOTSTRAP_USERNAME"] = "setup-smoke"
+        environment["WM_BOOTSTRAP_PASSWORD"] = bootstrap_password
+        command = [str(binary), "serve", "--config", str(config)]
+        control_data = temporary / "data"
+        if host_no_agent:
+            command = [str(binary), "host", "--no-agent", "--approval-required",
+                       "--public-url", f"http://127.0.0.1:{port}",
+                       "--listen", f"127.0.0.1:{port}", "--stun-listen", "127.0.0.1:0",
+                       "--data-dir", str(temporary / "data")]
+            control_data = control_data / "control"
+        print("Modo: " + ("host --no-agent (sem TUN)" if host_no_agent else "serve"))
+        def start_process():
+            return subprocess.Popen(command,
+                                    cwd=temporary, env=environment, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def stop_process(child):
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
+            else:
+                child.wait(timeout=5)
+
+        process = start_process()
         def interrupted(signum, frame):
             raise Failure("interrompido por sinal")
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -92,19 +119,54 @@ def run(binary, startup_timeout):
             finally:
                 connection.close()
 
-        deadline = time.monotonic() + startup_timeout
-        while True:
-            try:
-                health, _ = request("GET", "/healthz")
-                check(health.get("ok") is True, "health sem ok=true")
-                break
-            except (OSError, http.client.HTTPException):
-                check(time.monotonic() < deadline, "timeout aguardando health")
-                time.sleep(0.1)
+        def wait_healthy():
+            deadline = time.monotonic() + startup_timeout
+            while True:
+                try:
+                    health, _ = request("GET", "/healthz")
+                    check(health.get("ok") is True, "health sem ok=true")
+                    break
+                except (OSError, http.client.HTTPException):
+                    check(time.monotonic() < deadline, "timeout aguardando health")
+                    time.sleep(0.1)
+
+        def restart():
+            nonlocal process
+            stop_process(process)
+            # Intentionally preserve the exact bootstrap environment and database.
+            process = start_process()
+            wait_healthy()
+
+        wait_healthy()
         print("PASS health e inicialização isolada")
         api = "/api/v1"
         request("GET", api + "/admin/nodes", status=401)
         request("GET", api + "/map", token="wmn_invalid", status=401)
+        check(request("GET", api + "/setup")[0]["required"] is True, "setup novo não está pendente")
+        setup, headers = request("POST", api + "/setup/login", {"username": "setup-smoke", "password": bootstrap_password})
+        setup_cookie = headers["set-cookie"].split(";", 1)[0]
+        setup_csrf = setup["csrf_token"]
+        request("GET", api + "/admin/nodes", cookie=setup_cookie, status=401)
+        accounts = {"admin": {"username": "admin", "password": password},
+                    "user": {"username": "daily", "password": user_password}}
+        request("POST", api + "/setup/complete", accounts, cookie=setup_cookie, status=403)
+        created, _ = request("POST", api + "/setup/complete", accounts, cookie=setup_cookie, csrf=setup_csrf)
+        check(created["admin"]["role"] == "admin" and created["user"]["role"] == "user", "roles do setup incorretas")
+        check(request("GET", api + "/setup")[0]["required"] is False, "setup não foi consumido")
+        request("POST", api + "/setup/login", {"username": "setup-smoke", "password": bootstrap_password}, status=409)
+        request("POST", api + "/setup/complete", accounts, cookie=setup_cookie, csrf=setup_csrf, status=409)
+        restart()
+        check(request("GET", api + "/setup")[0]["required"] is False, "restart reabriu setup")
+        request("POST", api + "/setup/login", {"username": "setup-smoke", "password": bootstrap_password}, status=409)
+        request("POST", api + "/setup/complete", accounts, cookie=setup_cookie, csrf=setup_csrf, status=409)
+        user, headers = request("POST", api + "/auth/login", {"username": "daily", "password": user_password})
+        user_cookie = headers["set-cookie"].split(";", 1)[0]
+        check(user["user"]["role"] == "user", "conta cotidiana virou admin")
+        request("GET", api + "/admin/nodes", cookie=user_cookie, status=403)
+        request("GET", api + "/extensions/control_panel/runtime", cookie=user_cookie, status=403)
+        request("POST", api + "/auth/logout", cookie=user_cookie, csrf=user["csrf_token"])
+        request("GET", api + "/auth/session", cookie=user_cookie, status=401)
+        print("PASS bootstrap env, setup atômico, CSRF, replay negado inclusive após restart e usuário sem admin")
         request("POST", api + "/admin/login", {"username": "admin", "password": "wrong"}, status=401)
         login, headers = request("POST", api + "/admin/login", {"username": "admin", "password": password})
         cookie = headers["set-cookie"].split(";", 1)[0]
@@ -160,34 +222,67 @@ def run(binary, startup_timeout):
         admin("PUT", "/acl", {"yaml": "[invalid"}, status=400)
         check(admin("GET", "/acl")["compiled"] == acl["compiled"], "ACL inválida alterou compilação persistida")
         print("PASS ACL permit/deny e rollback de política inválida (somente control plane)")
-        html, headers = request("GET", "/")
-        if "text/html" not in headers.get("content-type", ""):
-            raise Failure("painel não embutido; compile frontend antes do binário")
-        for route in ("/login", "/nodes", "/nodes/smoke-a", "/acl"):
-            document, h = request("GET", route)
-            check(document == html and h.get("cache-control") == "no-cache", "deep link não retornou SPA sem cache")
-        assets = re.findall(rb'(?:src|href)=[\"\'](/assets/[^\"\']+)', html)
-        check(assets, "HTML sem assets locais verificáveis")
-        for asset in assets:
-            content, h = request("GET", asset.decode())
-            check(content and "text/html" not in h.get("content-type", ""), "asset retornou HTML/vazio")
-        request("GET", "/assets/smoke-missing.js", status=404)
+        root_body, headers = request("GET", "/")
+        check("text/plain" in headers.get("content-type", "") and b"headless" in root_body,
+              "servidor default deve iniciar sem painel/Node")
+        check(headers.get("cache-control") == "no-store", "root headless deve impedir cache")
+        for route in ("/login", "/nodes", "/nodes/smoke-a", "/acl", "/assets/smoke-missing.js"):
+            request("GET", route, status=404)
+        panel, _ = request("GET", api + "/extensions/control_panel/runtime", cookie=cookie)
+        check(panel["enabled"] is False, "instalação/default não pode ativar painel")
         request("GET", api + "/smoke-missing", status=404)
-        print("PASS deep links SPA, assets locais e 404 sem fallback indevido")
+        print("PASS root headless, painel opcional inativo e 404 sem fallback indevido")
+
+        # Minimal trusted static fixture, not a Node build or browser/React test.
+        www = control_data / "extensions/control_panel/www"
+        (www / "assets").mkdir(parents=True)
+        assets = {"index.html": b"<!doctype html><html><script src='/assets/app.js'></script></html>",
+                  "assets/app.js": b"console.log('trusted smoke fixture');"}
+        for name, contents in assets.items():
+            (www / name).write_bytes(contents)
+        manifest = json.dumps({"schema": 1, "id": "control_panel", "version": "smoke",
+                               "files": {name: hashlib.sha256(data).hexdigest() for name, data in assets.items()}},
+                              sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        (www / "bundle.json").write_bytes(manifest)
+        digest = hashlib.sha256(manifest).hexdigest()
+        runtime = api + "/extensions/control_panel/runtime"
+        panel, _ = request("GET", runtime, cookie=cookie)
+        check(panel["installed"] is True and panel["enabled"] is False and panel["digest"] == digest,
+              "instalar arquivos ativou painel ou digest divergiu")
+        check(b"headless" in request("GET", "/")[0], "instalação publicou UI sem confirmação")
+        enable = {"enabled": True, "digest": digest}
+        request("PUT", runtime, enable, cookie=cookie, status=403)
+        request("PUT", runtime, {"enabled": True, "digest": "0" * 64}, cookie=cookie, csrf=csrf, status=400)
+        check(request("PUT", runtime, enable, cookie=cookie, csrf=csrf)[0]["enabled"] is True,
+              "ativação com digest confirmado falhou")
+        html, headers = request("GET", "/login")
+        check(html == assets["index.html"] and "text/html" in headers.get("content-type", ""), "SPA opcional ausente")
+        check(request("GET", "/relay-status")[0] == assets["index.html"], "página de status do relay indisponível")
+        check("script-src 'self'" in headers.get("content-security-policy", ""), "CSP do painel ausente")
+        head, headers = request("HEAD", "/assets/app.js")
+        check(head == b"" and int(headers.get("content-length", "-1")) == len(assets["assets/app.js"]), "HEAD de asset incorreto")
+        (www / "assets/app.js").write_bytes(b"changed without trust")
+        check(request("GET", "/assets/app.js")[0] == assets["assets/app.js"], "snapshot ativo mudou pelo disco")
+        restart()
+        check(b"headless" in request("GET", "/")[0], "restart publicou pacote corrompido")
+        check(request("GET", runtime, cookie=cookie)[0]["enabled"] is False, "pacote corrompido permaneceu ativo")
+        (www / "assets/app.js").write_bytes(assets["assets/app.js"])
+        request("PUT", runtime, enable, cookie=cookie, csrf=csrf)
+        restart()
+        check(request("GET", "/")[0] == assets["index.html"], "restart perdeu confiança de pacote intacto")
+        for route in ("/api/smoke-missing", "/relay/smoke-missing", "/assets/smoke-missing.js"):
+            request("GET", route, status=404)
+        request("PUT", runtime, {"enabled": False}, cookie=cookie, csrf=csrf)
+        restart()
+        check(b"headless" in request("GET", "/")[0], "restart reativou painel desativado")
+        check(request("GET", api + "/setup")[0]["required"] is False, "reinícios do painel reabriram setup")
+        print("PASS painel: instalação inerte, CSRF/digest, snapshot, HEAD/CSP, persistência, corrupção e desativação após restart")
         admin("POST", "/logout")
         request("GET", api + "/admin/me", cookie=cookie, status=401)
         print("PASS logout invalida sessão; smoke HTTP concluído (não testa dataplane/Seance)")
     finally:
         if process is not None:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
-            else:
-                process.wait(timeout=5)
+            stop_process(process)
         for sig, handler in original_handlers.items():
             signal.signal(sig, handler)
         # Remover exclusivamente o diretório criado aqui, verificando identidade/dono.
@@ -202,11 +297,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=Path(__file__).resolve().parents[1] / "target/debug/wm")
     parser.add_argument("--startup-timeout", type=float, default=20)
+    parser.add_argument("--host-no-agent", action="store_true",
+                        help="exercita wm host --no-agent, incluindo data/control, sem TUN")
     args = parser.parse_args()
     if args.startup_timeout <= 0 or args.startup_timeout > 120:
         parser.error("startup-timeout deve estar entre 0 e 120 segundos")
     try:
-        run(args.binary, args.startup_timeout)
+        run(args.binary, args.startup_timeout, args.host_no_agent)
     except Failure as error:
         # Apenas rótulos nossos; nunca corpos HTTP, tokens ou senha.
         print("FAIL " + str(error), file=sys.stderr)

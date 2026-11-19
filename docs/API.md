@@ -8,7 +8,9 @@ Prefixo: `/api/v1`. JSON em UTF-8. Erros:
 
 Autenticação:
 - **Nó**: `Authorization: Bearer wmn_...`
-- **Admin**: cookie `wm_session` (HttpOnly) + header `X-WM-CSRF` nas mutações
+- **Conta humana**: cookie `wm_session` (HttpOnly) + `X-WM-CSRF` nas mutações;
+  `/admin/*` e administração de extensões exigem role `admin`, não apenas uma sessão
+- **Bootstrap**: cookie separado `wm_setup`, limitado ao setup inicial
 - **Integração**: `Authorization: Bearer wms_...` com escopo `integration:nodes:read`
 - **Público**: `/healthz`, `/api/v1/meta`, `/api/v1/enroll`
 
@@ -72,7 +74,48 @@ Não incrementa a versão do mapa.
 
 Marca o nó como desabilitado e remove a conexão do relay.
 
+## Setup inicial e contas humanas
+
+Servidor novo exige `WM_BOOTSTRAP_USERNAME` + `WM_BOOTSTRAP_PASSWORD` (ou
+`WM_BOOTSTRAP_PASSWORD_FILE`), sem senha gerada/logada. Veja [TUI/setup](remote-admin.md).
+
+- `GET /api/v1/setup` (público) → `{"required":true|false}`.
+- `POST /api/v1/setup/login` com `{"username":"...","password":"..."}` →
+  `{"csrf_token":"..."}` e cookie HttpOnly `wm_setup`, Path `/api/v1/setup`, TTL 600 s.
+  Nunca cria uma sessão admin. Compartilha rate limit de login com contas permanentes.
+- `POST /api/v1/setup/complete` exige esse cookie e `X-WM-CSRF`:
+
+  ```json
+  {"admin":{"username":"owner","password":"..."},"user":{"username":"daily","password":"..."}}
+  ```
+
+  → `{"admin":{"id":"...","username":"owner","role":"admin"},"user":{"id":"...","username":"daily","role":"user"}}`.
+  Nomes ASCII `[A-Za-z0-9_.-]`, 1–64 bytes, distintos sem diferenciar maiúsculas;
+  senhas 12–1024 bytes. Roles não são aceitas como entrada. A transação cria ambas
+  ou nenhuma conta, consome o setup e revoga todas as sessões bootstrap. Replays
+  retornam 409, inclusive após reinício com a mesma env. Não faz login automático na API.
+- `POST /api/v1/auth/login` com username/password → `{user:{id,username,role},csrf_token}`
+  e cookie `wm_session`. Não aceita a credencial bootstrap como conta humana.
+- `GET /api/v1/auth/session` → mesmo formato da resposta de login para a própria conta.
+- `POST /api/v1/auth/logout` (CSRF) invalida a sessão.
+
+Contas comuns consultam somente a própria sessão; não administram nós, ACL,
+convites, extensões ou SSE admin. Conta humana não substitui token de nó/serviço.
+Bancos legados preservam admins. Seed explícito legado `WM_ADMIN_PASSWORD` permanece
+compatível, mas não deve ser combinado com bootstrap nem é o padrão novo.
+
+### Painel opcional do servidor
+
+`GET /api/v1/extensions/control_panel/runtime` exige admin e retorna
+`{id,enabled,installed,digest,active_digest,files,bytes,error}`. `PUT` no mesmo path
+exige admin + CSRF e `{"enabled":true,"digest":"<sha256 lowercase>"}` ou
+`{"enabled":false}`. Upload/extração remota não foram introduzidos. A instalação
+por si só não ativa a UI, que permanece bloqueada enquanto houver setup pendente.
+Consulte [pacote e modelo de confiança](control-panel.md).
+
 ## Admin
+
+Todos os endpoints administrativos exigem role `admin`, incluindo extensões e SSE.
 
 ### `POST /api/v1/admin/login`
 

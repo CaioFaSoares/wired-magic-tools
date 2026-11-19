@@ -142,7 +142,7 @@ export function OverviewPage() {
       tone: "warn",
       title: "Relay WSS desabilitado",
       description: "Sem relay, peers atrás de NAT restritivo ou com UDP bloqueado não têm fallback.",
-      to: "/relay",
+      to: "/relay-status",
       action: "Ver relay",
     });
   }
@@ -153,7 +153,7 @@ export function OverviewPage() {
       title: "Pares via relay sem nó conectado",
       description:
         "Há peers reportando caminho relay, mas nenhuma conexão WSS ativa. Os relatórios podem estar defasados.",
-      to: "/relay",
+      to: "/relay-status",
       action: "Diagnosticar",
     });
   }
@@ -238,7 +238,7 @@ export function OverviewPage() {
           <CardHeader
             title="Topologia da malha"
             description="O traço de cada nó indica o caminho predominante relatado ao control plane."
-            actions={<LinkButton to="/relay" variant="ghost" size="sm">Analisar relay</LinkButton>}
+            actions={<LinkButton to="/relay-status" variant="ghost" size="sm">Analisar relay</LinkButton>}
           />
           <div className="px-3 pb-2 pt-1 sm:px-4">
             <MeshTopology nodes={nodes} relayEnabled={relayEnabled} maxNodes={9} caption="Topologia da malha" />

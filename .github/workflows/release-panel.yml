@@ -1,0 +1,40 @@
+name: Package optional React control panel
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Trusted revision/tag to package; separate from the server build'
+        required: true
+        default: main
+        type: string
+permissions:
+  contents: read
+jobs:
+  panel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test packager without building Rust
+        run: python3 -B -m unittest discover -s scripts -p 'test_package_control_panel.py' -v
+      - name: Build optional UI and package trusted assets
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web typecheck
+          pnpm --dir web build
+          python3 scripts/package_control_panel.py --output panel-artifacts/control_panel.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: control-panel-${{ github.run_id }}
+          path: panel-artifacts/*
+          if-no-files-found: error
